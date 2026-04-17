@@ -105,14 +105,12 @@ app.post("/webhook/fillout", async (req, res) => {
     }
 
     const event = req.body;
-    const eventType = event.eventType; // "submission.completed" or "submission.partial"
+    const eventType = event.eventType || "submission.completed";
     const formId    = event.formId;
     const formName  = event.formName || formId;
 
     // Only handle relevant event types
-    if (!["submission.completed", "submission.partial"].includes(eventType)) {
-      return res.json({ message: "Event type ignored" });
-    }
+  
 
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
