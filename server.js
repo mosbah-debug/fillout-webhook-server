@@ -106,9 +106,9 @@ async function syncInProgress() {
     const loggedIds = await getLoggedIds(sheets);
 
     let newCount = 0;
-    for (const sub of submissions) {
+   for (const sub of submissions) {
       const subId = sub.submissionId;
-      if (loggedIds.has(subId)) continue; // already logged
+      if (loggedIds.has(subId)) continue;
 
       await logSubmission(sheets, {
         formId:       FILLOUT_FORM_ID,
@@ -118,6 +118,8 @@ async function syncInProgress() {
         timestamp:    sub.lastUpdatedAt || sub.submittedAt || new Date().toISOString(),
       });
       newCount++;
+      // Wait 1 second between writes to avoid Google rate limits
+      await new Promise(r => setTimeout(r, 1000));
     }
 
     console.log(`Synced ${newCount} new in-progress submissions.`);
