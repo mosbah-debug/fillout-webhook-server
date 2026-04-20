@@ -77,52 +77,58 @@ async function logSubmission(sheets, data) {
   });
 }
 
-// Fetch in-progress submissions from Fillout API
+// Fetch in-progress submissions from Fillout API with pagination
 async function syncInProgress() {
   try {
     console.log("Syncing in-progress submissions from Fillout...");
-
-    const response = await fetch(
-      `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?status=in_progress&limit=100`,
-      { headers: { "Authorization": `Bearer ${FILLOUT_API_KEY}` } }
-    );
-
-    if (!response.ok) {
-      console.error("Fillout API error:", await response.text());
-      return;
-    }
-
-    const data = await response.json();
-    const submissions = data.responses || [];
-
-    if (submissions.length === 0) {
-      console.log("No in-progress submissions found.");
-      return;
-    }
 
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
     await ensureHeaders(sheets);
     const loggedIds = await getLoggedIds(sheets);
 
+    let offset = 0;
     let newCount = 0;
-   for (const sub of submissions) {
-      const subId = sub.submissionId;
-      if (loggedIds.has(subId)) continue;
+    let hasMore = true;
 
-      await logSubmission(sheets, {
-        formId:       FILLOUT_FORM_ID,
-        formName:     sub.formName || "Peak Fillout (vChris)",
-        status:       "In Progress",
-        submissionId: subId,
-        timestamp:    sub.lastUpdatedAt || sub.submittedAt || new Date().toISOString(),
-      });
-      newCount++;
-      // Wait 1 second between writes to avoid Google rate limits
-      await new Promise(r => setTimeout(r, 1000));
+    while (hasMore) {
+      const response = await fetch(
+        `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?status=in_progress&limit=100&offset=${offset}`,
+        { headers: { "Authorization": `Bearer ${FILLOUT_API_KEY}` } }
+      );
+
+      if (!response.ok) {
+        console.error("Fillout API error:", await response.text());
+        break;
+      }
+
+      const data = await response.json();
+      const submissions = data.responses || [];
+
+      if (submissions.length === 0) { hasMore = false; break; }
+
+      for (const sub of submissions) {
+        const subId = sub.submissionId;
+        if (loggedIds.has(subId)) continue;
+
+        await logSubmission(sheets, {
+          formId:       FILLOUT_FORM_ID,
+          formName:     "Peak Fillout (vChris)",
+          status:       "In Progress",
+          submissionId: subId,
+          timestamp:    sub.lastUpdatedAt || sub.startedAt || new Date().toISOString(),
+        });
+        loggedIds.add(subId);
+        newCount++;
+        await new Promise(r => setTimeout(r, 1000));
+      }
+
+      offset += 100;
+      if (submissions.length < 100) hasMore = false;
+      console.log(`Processed page at offset ${offset}, ${newCount} new so far...`);
     }
 
-    console.log(`Synced ${newCount} new in-progress submissions.`);
+    console.log(`Sync complete. ${newCount} new in-progress submissions added.`);
   } catch (err) {
     console.error("Sync error:", err);
   }
@@ -162,8 +168,8 @@ app.post("/webhook/fillout", async (req, res) => {
 
 // Manual trigger endpoint
 app.get("/sync", async (req, res) => {
-  await syncInProgress();
-  res.json({ success: true, message: "Sync triggered" });
+  syncInProgress(); // run in background, don't await
+  res.json({ success: true, message: "Sync started in background" });
 });
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
