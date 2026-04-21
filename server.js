@@ -505,7 +505,9 @@ app.get("/health", (_, res) => res.json({ status: "ok" }));
 setInterval(syncInProgress, 60 * 60 * 1000);
 setInterval(syncHubSpotProjects, 60 * 60 * 1000);
 
-syncInProgress();
-syncHubSpotProjects();
-
-app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Webhook server running on port ${PORT}`);
+  // Delay startup syncs so server is ready before heavy work begins
+  setTimeout(syncInProgress, 5000);
+  setTimeout(syncHubSpotProjects, 10000);
+});
