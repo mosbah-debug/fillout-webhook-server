@@ -10,6 +10,8 @@ const SPREADSHEET_ID  = process.env.SPREADSHEET_ID;
 const SHEET_NAME      = process.env.SHEET_NAME || "Fillout Log";
 const FILLOUT_API_KEY = process.env.FILLOUT_API_KEY;
 const FILLOUT_FORM_ID = process.env.FILLOUT_FORM_ID;
+const HUBSPOT_TOKEN   = process.env.HUBSPOT_TOKEN;
+const PROJECTS_SHEET  = "HubSpot Projects";
 const PORT            = process.env.PORT || 3000;
 
 // Fixed question order based on your form
@@ -76,7 +78,6 @@ function buildRow(data) {
   const timestamp = now.toLocaleString("en-US", { timeZone: "Asia/Beirut" });
   const month = now.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Beirut" });
 
-  // Build a map of question name -> answer
   const answerMap = {};
   if (data.questions && Array.isArray(data.questions)) {
     for (const q of data.questions) {
@@ -85,7 +86,6 @@ function buildRow(data) {
     }
   }
 
-  // Map answers in fixed column order
   const answers = QUESTION_NAMES.map(name => answerMap[name] ?? "");
 
   return [
@@ -173,6 +173,214 @@ async function syncInProgress() {
   }
 }
 
+// ── HUBSPOT PROJECTS SYNC ────────────────────────────────────────────────────
+
+// Ensure the HubSpot Projects sheet has headers
+async function ensureProjectHeaders(sheets) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${PROJECTS_SHEET}!1:1`,
+  });
+  if (!res.data.values?.length) {
+    const headers = [
+      "Project ID", "Project Name", "Pipeline", "Stage", "FP Owner",
+      "WA Owner", "Card Due Date", "Target Due Date", "Associated Contact",
+      "Contact Email", "Last Synced"
+    ];
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${PROJECTS_SHEET}!1:1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [headers] },
+    });
+    console.log("Created HubSpot Projects sheet headers.");
+  }
+}
+
+// Fetch all projects from HubSpot custom object 0-970 with pagination
+async function fetchAllProjects() {
+  const properties = [
+    "hs_object_id", "hs_name", "hs_pipeline", "hs_pipeline_stage",
+    "fp_owner", "wa_owner", "card_due_date", "target_due_date"
+  ];
+
+  let allProjects = [];
+  let after = null;
+
+  while (true) {
+    const url = new URL("https://api.hubapi.com/crm/v3/objects/0-970");
+    url.searchParams.set("limit", "100");
+    url.searchParams.set("properties", properties.join(","));
+    url.searchParams.set("associations", "contacts");
+    if (after) url.searchParams.set("after", after);
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        "Authorization": `Bearer ${HUBSPOT_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("HubSpot API error:", err);
+      throw new Error(`HubSpot API error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    allProjects = allProjects.concat(data.results || []);
+
+    if (data.paging?.next?.after) {
+      after = data.paging.next.after;
+    } else {
+      break;
+    }
+  }
+
+  console.log(`Fetched ${allProjects.length} projects from HubSpot.`);
+  return allProjects;
+}
+
+// Fetch pipeline stage labels so we can show readable names not IDs
+async function fetchPipelineStages() {
+  const res = await fetch(
+    "https://api.hubapi.com/crm/v3/pipelines/0-970",
+    {
+      headers: {
+        "Authorization": `Bearer ${HUBSPOT_TOKEN}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  if (!res.ok) {
+    console.warn("Could not fetch pipeline stages, will use raw IDs.");
+    return { pipelines: {}, stages: {} };
+  }
+
+  const data = await res.json();
+  const pipelines = {};
+  const stages = {};
+
+  for (const pipeline of (data.results || [])) {
+    pipelines[pipeline.id] = pipeline.label;
+    for (const stage of (pipeline.stages || [])) {
+      stages[stage.id] = stage.label;
+    }
+  }
+
+  return { pipelines, stages };
+}
+
+// Fetch contact name + email for a given contact ID
+async function fetchContact(contactId) {
+  try {
+    const res = await fetch(
+      `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}?properties=firstname,lastname,email`,
+      {
+        headers: {
+          "Authorization": `Bearer ${HUBSPOT_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+    if (!res.ok) return { name: "", email: "" };
+    const data = await res.json();
+    const p = data.properties || {};
+    const name = [p.firstname, p.lastname].filter(Boolean).join(" ");
+    return { name, email: p.email || "" };
+  } catch {
+    return { name: "", email: "" };
+  }
+}
+
+// Format a HubSpot timestamp (ms) to readable date
+function formatDate(val) {
+  if (!val) return "";
+  const d = new Date(Number(val));
+  return isNaN(d) ? val : d.toLocaleDateString("en-US", { timeZone: "Asia/Beirut" });
+}
+
+// Main HubSpot Projects sync function
+async function syncHubSpotProjects() {
+  if (!HUBSPOT_TOKEN) {
+    console.warn("HUBSPOT_TOKEN not set, skipping projects sync.");
+    return;
+  }
+
+  try {
+    console.log("Syncing HubSpot Projects...");
+
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureProjectHeaders(sheets);
+
+    const [projects, { pipelines, stages }] = await Promise.all([
+      fetchAllProjects(),
+      fetchPipelineStages()
+    ]);
+
+    const syncedAt = new Date().toLocaleString("en-US", { timeZone: "Asia/Beirut" });
+    const rows = [];
+
+    for (const project of projects) {
+      const p = project.properties || {};
+
+      // Get first associated contact if any
+      const contactIds = project.associations?.contacts?.results?.map(c => c.id) || [];
+      let contactName = "";
+      let contactEmail = "";
+      if (contactIds.length > 0) {
+        const contact = await fetchContact(contactIds[0]);
+        contactName  = contact.name;
+        contactEmail = contact.email;
+        // Small delay to avoid hitting HubSpot rate limits
+        await new Promise(r => setTimeout(r, 100));
+      }
+
+      rows.push([
+        p.hs_object_id || project.id || "",
+        p.hs_name || "",
+        pipelines[p.hs_pipeline] || p.hs_pipeline || "",
+        stages[p.hs_pipeline_stage] || p.hs_pipeline_stage || "",
+        p.fp_owner || "",
+        p.wa_owner || "",
+        formatDate(p.card_due_date),
+        formatDate(p.target_due_date),
+        contactName,
+        contactEmail,
+        syncedAt
+      ]);
+    }
+
+    // Clear existing data (except header) then rewrite — full refresh
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${PROJECTS_SHEET}!A2:Z`,
+    });
+
+    if (rows.length > 0) {
+      const chunkSize = 500;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        const chunk = rows.slice(i, i + chunkSize);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${PROJECTS_SHEET}!A2`,
+          valueInputOption: "USER_ENTERED",
+          requestBody: { values: chunk },
+        });
+        if (i + chunkSize < rows.length) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+
+    console.log(`HubSpot Projects sync complete. ${rows.length} projects written.`);
+  } catch (err) {
+    console.error("HubSpot Projects sync error:", err);
+  }
+}
+
 // ── WEBHOOK ENDPOINT ─────────────────────────────────────────────────────────
 app.post("/webhook/fillout", async (req, res) => {
   try {
@@ -207,15 +415,27 @@ app.post("/webhook/fillout", async (req, res) => {
   }
 });
 
-// Manual trigger endpoint
+// ── ENDPOINTS ────────────────────────────────────────────────────────────────
+
+// Manual trigger for Fillout in-progress sync
 app.get("/sync", async (req, res) => {
   syncInProgress();
-  res.json({ success: true, message: "Sync started in background" });
+  res.json({ success: true, message: "Fillout sync started in background" });
+});
+
+// Manual trigger for HubSpot Projects sync
+app.get("/sync-projects", async (req, res) => {
+  syncHubSpotProjects();
+  res.json({ success: true, message: "HubSpot Projects sync started in background" });
 });
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
-setInterval(syncInProgress, 60 * 60 * 1000);
+// ── SCHEDULES ────────────────────────────────────────────────────────────────
+setInterval(syncInProgress, 60 * 60 * 1000);        // Fillout: every hour
+setInterval(syncHubSpotProjects, 60 * 60 * 1000);   // HubSpot Projects: every hour
+
 syncInProgress();
+syncHubSpotProjects();
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
