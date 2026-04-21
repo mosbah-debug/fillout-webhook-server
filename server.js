@@ -178,22 +178,6 @@ async function fetchPipelineStages() {
     return { pipelines: {}, stages: {} };
   }
 }
-      headers: { "Authorization": `Bearer ${HUBSPOT_TOKEN}` }
-    });
-    if (!res.ok) return { pipelines: {}, stages: {} };
-    const data = await res.json();
-    const pipelines = {}, stages = {};
-    for (const pipeline of (data.results || [])) {
-      pipelines[pipeline.id] = pipeline.label;
-      for (const stage of (pipeline.stages || [])) {
-        stages[stage.id] = stage.label;
-      }
-    }
-    return { pipelines, stages };
-  } catch {
-    return { pipelines: {}, stages: {} };
-  }
-}
 
 async function fetchContact(contactId) {
   try {
