@@ -149,7 +149,35 @@ async function syncInProgress() {
 
 async function fetchPipelineStages() {
   try {
-    const res = await fetch("https://api.hubapi.com/crm/v3/pipelines/0-970", {
+    const res = await fetch("https://api.hubapi.com/crm/v3/schemas/0-970", {
+      headers: { "Authorization": `Bearer ${HUBSPOT_TOKEN}` }
+    });
+    if (!res.ok) return { pipelines: {}, stages: {} };
+    const data = await res.json();
+
+    const pipelines = {}, stages = {};
+
+    // Extract stage labels from hs_v2_date_entered_* property labels
+    // Label format: 'Date entered "Stage Name (Pipeline Name)"'
+    for (const prop of (data.properties || [])) {
+      if (prop.name.startsWith("hs_v2_date_entered_") && prop.name !== "hs_v2_date_entered_current_stage") {
+        const match = prop.label.match(/^Date entered "(.+) \((.+)\)"$/);
+        if (match) {
+          const stageLabel    = match[1];
+          const pipelineLabel = match[2];
+          // The property name suffix is the stage ID
+          const stageId = prop.name.replace("hs_v2_date_entered_", "");
+          stages[stageId] = stageLabel;
+          pipelines[stageId] = pipelineLabel;
+        }
+      }
+    }
+
+    return { pipelines, stages };
+  } catch {
+    return { pipelines: {}, stages: {} };
+  }
+}
       headers: { "Authorization": `Bearer ${HUBSPOT_TOKEN}` }
     });
     if (!res.ok) return { pipelines: {}, stages: {} };
@@ -185,7 +213,7 @@ async function fetchContact(contactId) {
 async function fetchProjectById(projectId) {
   try {
     const res = await fetch(
-      `https://api.hubapi.com/crm/v3/objects/0-970/${projectId}?properties=hs_name,hs_pipeline,hs_pipeline_stage,fp_owner,wa_owner,card_due_date,target_due_date&associations=contacts`,
+      `https://api.hubapi.com/crm/v3/objects/0-970/${projectId}?properties=hs_name,hs_pipeline,hs_pipeline_stage,fp_owner,wa_owner,card_due_date_,hs_target_due_date&associations=contacts`,
       { headers: { "Authorization": `Bearer ${HUBSPOT_TOKEN}` } }
     );
     if (!res.ok) return null;
@@ -294,7 +322,7 @@ async function syncHubSpotProjects() {
     while (true) {
       const url = new URL("https://api.hubapi.com/crm/v3/objects/0-970");
       url.searchParams.set("limit", "100");
-      url.searchParams.set("properties", "hs_object_id,hs_name,hs_pipeline,hs_pipeline_stage,fp_owner,wa_owner,card_due_date,target_due_date");
+      url.searchParams.set("properties", "hs_object_id,hs_name,hs_pipeline,hs_pipeline_stage,fp_owner,wa_owner,card_due_date_,hs_target_due_date");
       url.searchParams.set("associations", "contacts");
       if (after) url.searchParams.set("after", after);
 
@@ -353,7 +381,7 @@ async function syncHubSpotProjects() {
       projectRows.push([
         projectId, p.hs_name || "", pipelineLabel, stageLabel,
         p.fp_owner || "", p.wa_owner || "",
-        formatDate(p.card_due_date), formatDate(p.target_due_date),
+        formatDate(p.card_due_date_), formatDate(p.hs_target_due_date),
         contactName, contactEmail, syncedAt
       ]);
     }
