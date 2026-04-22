@@ -282,12 +282,15 @@ async function syncHubSpotProjects() {
 
     for (const p of projects) {
       const props     = p.properties || {};
+
+      // Skip projects not in Planning Engagement pipeline
+      if (props.hs_pipeline !== "3078420705") continue;
+
       const id        = p.id;
       const name      = props.hs_name || "";
       const pipeline  = pipelineLabel(props.hs_pipeline);
       const stageId   = props.hs_pipeline_stage || "";
       const stage     = stageLabel(stageId);
-
       projectRows.push([
         id, name, pipeline, stage,
         props.fp_owner || "",
