@@ -399,15 +399,14 @@ async function syncHubSpotProjects() {
 // ── HUBSPOT STAGE CHANGE WEBHOOK ─────────────────────────────────────────────
 
 app.post("/webhook/hubspot", async (req, res) => {
-  // Respond immediately so HubSpot doesn't retry
   res.json({ success: true });
 
   try {
     const events = Array.isArray(req.body) ? req.body : [req.body];
 
     const stageEvents = events.filter(e =>
-      e.subscriptionType === "object.propertyChange" &&
-      e.propertyName === "hs_pipeline_stage"
+      e.subscriptionType === "contact.propertyChange" &&
+      e.propertyName === "planning_engagement_phase"
     );
 
     if (stageEvents.length === 0) return;
@@ -416,48 +415,23 @@ app.post("/webhook/hubspot", async (req, res) => {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureStageLogHeaders(sheets);
 
-    const { pipelines, stages } = await fetchPipelineStages();
     const now = new Date();
     const timestamp = now.toLocaleString("en-US", { timeZone: "Asia/Beirut" });
     const month = now.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "Asia/Beirut" });
 
     for (const event of stageEvents) {
-      const projectId = String(event.objectId);
-      const newStageId = event.propertyValue;
-      const newStageLabel = stages[newStageId] || newStageId;
+      const contactId = String(event.objectId);
+      const newStage  = event.propertyValue;
 
-      // Get previous stage from snapshot
-      const snapshotRes = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${PROJECTS_SHEET}!A:D`,
-      });
-      const snapshotRows = snapshotRes.data.values || [];
-      const snapshotRow = snapshotRows.find(r => r[0] === projectId);
-      const fromStage = snapshotRow ? snapshotRow[3] : "Unknown";
-
-      // Fetch full project details
-      const project = await fetchProjectById(projectId);
-      if (!project) { console.warn(`Could not fetch project ${projectId}`); continue; }
-
-      const p = project.properties || {};
-      const pipelineLabel = pipelines[p.hs_pipeline] || p.hs_pipeline || "";
-
-      const contactIds = project.associations?.contacts?.results?.map(c => c.id) || [];
-      let contactName = "", contactEmail = "";
-      if (contactIds.length > 0) {
-        const contact = await fetchContact(contactIds[0]);
-        contactName = contact.name;
-        contactEmail = contact.email;
-      }
+      const contact = await fetchContact(contactId);
 
       await appendStageChangeRow(sheets, [
-        timestamp, month, projectId, p.hs_name || "",
-        contactName, contactEmail,
-        fromStage, newStageLabel, pipelineLabel, "Webhook (real-time)"
+        timestamp, month, contactId, contact.name,
+        contact.name, contact.email,
+        "", newStage, "Planning Engagement", "Webhook (real-time)"
       ]);
 
-      console.log(`[Webhook] ${p.hs_name}: ${fromStage} → ${newStageLabel}`);
-      await new Promise(r => setTimeout(r, 200));
+      console.log(`[Webhook] Planning Engagement stage change: ${contact.name} → ${newStage}`);
     }
   } catch (err) {
     console.error("HubSpot webhook processing error:", err);
