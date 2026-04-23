@@ -208,7 +208,7 @@ async function syncInProgress() {
       if (!(data.responses?.length)) break;
     }
     if (all.length) await batchLogSubmissions(sheets, all);
-    console.log(`[Fillout sync] ${all.length} in-progress submissions synced`);
+    console.log(`[Fillout sync] ${all.length} submissions synced`);
   } catch (err) {
     console.error("[Fillout sync error]", err.message);
   }
