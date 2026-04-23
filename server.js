@@ -187,30 +187,35 @@ async function syncInProgress() {
 
     if (!FILLOUT_API_KEY || !FILLOUT_FORM_ID) return;
 
-    let offset = 0;
-    const limit = 100;
+let offset = 0;
+    const limit = 150;
     let total   = Infinity;
     const all   = [];
 
+    // Read existing submission IDs to avoid duplicates
+    const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
+    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
+
     while (offset < total) {
-  const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
-  const data = await res.json();
-  
-  if (offset === 0) total = data.totalResponses ?? 0;
-  
-  const responses = data.responses || [];
-  if (!responses.length) break;
-  
-  for (const sub of responses) {
-    all.push({
-      formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-      status: sub.status || "Completed", submissionId: sub.submissionId,
-      timestamp: sub.submittedAt, questions: sub.questions || [],
-    });
-  }
-  offset += limit;
-}
+      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
+      const data = await res.json();
+
+      if (offset === 0) total = data.totalResponses ?? 0;
+
+      const responses = data.responses || [];
+      if (!responses.length) break;
+
+      for (const sub of responses) {
+        if (existingIds.has(sub.submissionId)) continue;
+        all.push({
+          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+          status: sub.status || "Completed", submissionId: sub.submissionId,
+          timestamp: sub.submittedAt, questions: sub.questions || [],
+        });
+      }
+      offset += limit;
+    }
 
     if (all.length) await batchLogSubmissions(sheets, all);
     console.log(`[Fillout sync] ${all.length} submissions synced`);
