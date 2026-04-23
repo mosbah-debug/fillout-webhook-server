@@ -211,7 +211,6 @@ async function syncInProgress() {
   }
   offset += limit;
 }
-if (!(data.responses?.length)) break;
 
     if (all.length) await batchLogSubmissions(sheets, all);
     console.log(`[Fillout sync] ${all.length} submissions synced`);
