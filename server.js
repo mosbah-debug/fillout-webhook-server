@@ -133,7 +133,7 @@ async function appendRows(sheets, tabName, rows) {
 }
 
 // ── FILLOUT SYNC ──────────────────────────────────────────────────────────────
-const FILLOUT_LOG_TAB     = "Fillout Log";
+const FILLOUT_LOG_TAB     = "Fillout";
 const FILLOUT_LOG_HEADERS = [
   "Timestamp", "Month", "Form Name", "Status", "Submission ID",
   "First Name", "Last Name", "Email", "Phone", "Raw Questions JSON",
