@@ -197,7 +197,7 @@ let offset = 0;
     const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
 
     while (offset < total) {
-      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
+      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
       const data = await res.json();
 
