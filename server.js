@@ -193,20 +193,26 @@ async function syncInProgress() {
     const all   = [];
 
     while (offset < total) {
-      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
-      const data = await res.json();
-      total = data.totalResponses ?? 0;
-      for (const sub of data.responses || []) {
-        all.push({
-          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-          status: "In Progress", submissionId: sub.submissionId,
-          timestamp: sub.submittedAt, questions: sub.questions || [],
-        });
-      }
-      offset += limit;
-      if (!(data.responses?.length)) break;
-    }
+  const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
+  const data = await res.json();
+  
+  if (offset === 0) total = data.totalResponses ?? 0;
+  
+  const responses = data.responses || [];
+  if (!responses.length) break;
+  
+  for (const sub of responses) {
+    all.push({
+      formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+      status: sub.status || "Completed", submissionId: sub.submissionId,
+      timestamp: sub.submittedAt, questions: sub.questions || [],
+    });
+  }
+  offset += limit;
+}
+if (!(data.responses?.length)) break;
+
     if (all.length) await batchLogSubmissions(sheets, all);
     console.log(`[Fillout sync] ${all.length} submissions synced`);
   } catch (err) {
