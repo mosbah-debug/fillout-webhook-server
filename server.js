@@ -193,7 +193,7 @@ async function syncInProgress() {
     const all   = [];
 
     while (offset < total) {
-      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&status=in_progress`;
+      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
       const data = await res.json();
       total = data.totalResponses ?? 0;
