@@ -188,7 +188,7 @@ async function syncInProgress() {
     if (!FILLOUT_API_KEY || !FILLOUT_FORM_ID) return;
 
     let offset = 0;
-    const limit = 150;
+    const limit = 100;
     let total   = Infinity;
     const all   = [];
 
