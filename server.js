@@ -272,6 +272,30 @@ async function fetchAllProjects() {
   }
   return projects;
 }
+async function loadStageCache(sheets) { ... }
+async function saveStageCache(sheets, cache) { ... }
+// ── PERSISTENT STAGE CACHE (replaces in-memory lastKnownStage) ───────────────
+// Uses a hidden "_stage_cache" tab in Google Sheets to persist stage snapshots
+// across server restarts. Structure: col A = projectId, col B = stageId
+
+const CACHE_TAB = "HubSpot Cache";
+
+async function loadStageCache(sheets) {
+  const rows = await readTab(sheets, CACHE_TAB);
+  const cache = {};
+  for (const row of rows) {
+    if (row[0] && row[1]) cache[row[0]] = row[1];
+  }
+  return cache;
+}
+
+async function saveStageCache(sheets, cache) {
+  const rows = Object.entries(cache).map(([id, stageId]) => [id, stageId]);
+  await writeTab(sheets, CACHE_TAB, rows);
+}
+
+// ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
+// Replace your existing syncHubSpotProjects() function with this one entirely.
 
 async function syncHubSpotProjects() {
   try {
@@ -279,6 +303,10 @@ async function syncHubSpotProjects() {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, PROJECTS_TAB);
     await ensureTab(sheets, STAGE_CHANGE_TAB);
+    await ensureTab(sheets, CACHE_TAB);
+
+    // Load persisted stage cache from sheet
+    const stageCache = await loadStageCache(sheets);
 
     const projects = await fetchAllProjects();
     console.log(`[Projects sync] Fetched ${projects.length} projects`);
@@ -286,21 +314,21 @@ async function syncHubSpotProjects() {
     const now   = new Date().toISOString();
     const month = new Date().toLocaleString("default", { month: "long", year: "numeric" });
 
-    // Build rows for HubSpot Projects tab
-    const projectRows = [PROJECTS_HEADERS];
+    const projectRows  = [PROJECTS_HEADERS];
     const stageChanges = [];
 
     for (const p of projects) {
-      const props     = p.properties || {};
+      const props    = p.properties || {};
 
-      // Skip projects not in Planning Engagement pipeline
+      // Only process Planning Engagement pipeline
       if (props.hs_pipeline !== "3078420705") continue;
 
-      const id        = p.id;
-      const name      = props.hs_name || "";
-      const pipeline  = pipelineLabel(props.hs_pipeline);
-      const stageId   = props.hs_pipeline_stage || "";
-      const stage     = stageLabel(stageId);
+      const id      = p.id;
+      const name    = props.hs_name || "";
+      const pipeline = pipelineLabel(props.hs_pipeline);
+      const stageId  = props.hs_pipeline_stage || "";
+      const stage    = stageLabel(stageId);
+
       projectRows.push([
         id, name, pipeline, stage,
         props.fp_owner || "",
@@ -312,23 +340,27 @@ async function syncHubSpotProjects() {
         props.createdate || "",
       ]);
 
-      // Stage change detection
-      if (lastKnownStage[id] !== undefined && lastKnownStage[id] !== stageId) {
+      // Stage change detection — compare against persisted cache
+      const cachedStageId = stageCache[id];
+      if (cachedStageId !== undefined && cachedStageId !== stageId) {
+        // Stage changed — append a new row, never update existing ones
         stageChanges.push([
           now, month, id, name,
           pipeline,
-          stageLabel(lastKnownStage[id]),
+          stageLabel(cachedStageId),
           stage,
-          "Hourly Sync",
+          "API Sync",
         ]);
-        console.log(`[Stage change] ${name}: ${stageLabel(lastKnownStage[id])} → ${stage}`);
+        console.log(`[Stage change] ${name}: ${stageLabel(cachedStageId)} → ${stage}`);
       }
-      lastKnownStage[id] = stageId;
+
+      // Update cache with current stage
+      stageCache[id] = stageId;
     }
 
-    // Write projects tab (full refresh)
+    // Write projects tab (full refresh — always current snapshot)
     await writeTab(sheets, PROJECTS_TAB, projectRows);
-    console.log(`[Projects sync] Wrote ${projects.length} rows to "${PROJECTS_TAB}"`);
+    console.log(`[Projects sync] Wrote ${projectRows.length - 1} rows to "${PROJECTS_TAB}"`);
 
     // Ensure Stage Change Log headers exist
     const existingChanges = await readTab(sheets, STAGE_CHANGE_TAB);
@@ -341,10 +373,16 @@ async function syncHubSpotProjects() {
       });
     }
 
+    // Append new stage change rows (never overwrite)
     if (stageChanges.length) {
       await appendRows(sheets, STAGE_CHANGE_TAB, stageChanges);
-      console.log(`[Stage Change Log] Logged ${stageChanges.length} changes`);
+      console.log(`[Stage Change Log] Logged ${stageChanges.length} new change(s)`);
     }
+
+    // Persist updated cache back to sheet
+    await saveStageCache(sheets, stageCache);
+    console.log(`[Stage cache] Saved ${Object.keys(stageCache).length} project stages`);
+
   } catch (err) {
     console.error("[Projects sync error]", err.message);
   }
