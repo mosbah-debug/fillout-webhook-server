@@ -135,8 +135,15 @@ async function appendRows(sheets, tabName, rows) {
 // ── FILLOUT SYNC ──────────────────────────────────────────────────────────────
 const FILLOUT_LOG_TAB     = "Fillout";
 const FILLOUT_LOG_HEADERS = [
-  "Timestamp", "Month", "Form Name", "Status", "Submission ID",
-  "First Name", "Last Name", "Email", "Phone", "Raw Questions JSON",
+    "Timestamp", "Form Name", "Form ID", "Status", "Submission ID", "Month",
+  "Before Continuing - Did You Watch The Video Above?",
+  "First Name", "Last Name", "Email", "Mobile Phone Number",
+  "Will the retirement planning be just yourself or include a spouse/partner",
+  "About how much have you saved for retirement?",
+  "Are you retired, looking to retire in the next 5 years, or looking to retire in the next 10 years?",
+  "How many of our educational YouTube videos would you guess you've watched?",
+  "How did you hear about Peak Financial Planning?",
+  "(OPTIONAL) Please share any additional information related to your goals or pain points you think would be helpful",
 ];
 
 async function ensureFilloutHeaders(sheets) {
@@ -166,17 +173,28 @@ async function batchLogSubmissions(sheets, submissions) {
     const now = sub.timestamp || new Date().toISOString();
     const month = new Date(now).toLocaleString("default", { month: "long", year: "numeric" });
     return [
-      now, month, sub.formName || "", sub.status || "",
+      now,
+      sub.formName || "",
+      sub.formId || "",
+      sub.status || "",
       sub.submissionId || "",
-      extractFilloutField(q, "first name", "firstname"),
-      extractFilloutField(q, "last name", "lastname"),
-      extractFilloutField(q, "email"),
-      extractFilloutField(q, "phone"),
-      JSON.stringify(q),
+      month,
+      extractFilloutField(q, "Before Continuing"),
+      extractFilloutField(q, "First Name", "firstname"),
+      extractFilloutField(q, "Last Name", "lastname"),
+      extractFilloutField(q, "Email"),
+      extractFilloutField(q, "Mobile Phone", "phone"),
+      extractFilloutField(q, "spouse", "partner"),
+      extractFilloutField(q, "how much have you saved"),
+      extractFilloutField(q, "retired", "looking to retire"),
+      extractFilloutField(q, "youtube videos"),
+      extractFilloutField(q, "how did you hear"),
+      extractFilloutField(q, "additional information", "goals or pain points"),
     ];
   });
   await appendRows(sheets, FILLOUT_LOG_TAB, rows);
 }
+
 
 async function syncInProgress() {
   try {
@@ -208,11 +226,12 @@ let offset = 0;
 
       for (const sub of responses) {
         if (existingIds.has(sub.submissionId)) continue;
-        all.push({
-          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-          status: sub.status || "Completed", submissionId: sub.submissionId,
-          timestamp: sub.submittedAt, questions: sub.questions || [],
-        });
+      all.push({
+  formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+  status: sub.status || "Completed", submissionId: sub.submissionId,
+  timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
+  questions: sub.questions || [],
+});
       }
       offset += limit;
     }
