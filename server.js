@@ -225,7 +225,11 @@ let offset = 0;
       if (!responses.length) break;
 
       for (const sub of responses) {
-        if (existingIds.has(sub.submissionId)) continue;
+        if (existingIds.has(sub.submissionId)) {
+  console.log(`[Fillout skip] ${sub.submissionId} already exists`);
+  continue;
+}
+console.log(`[Fillout new] ${sub.submissionId}`);
       all.push({
   formId: FILLOUT_FORM_ID, formName: "Fillout Form",
   status: sub.status || "Completed", submissionId: sub.submissionId,
