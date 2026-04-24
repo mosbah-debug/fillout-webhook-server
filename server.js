@@ -161,7 +161,10 @@ async function ensureFilloutHeaders(sheets) {
 function extractFilloutField(questions, ...names) {
   for (const q of questions) {
     if (names.some(n => q.name?.toLowerCase().includes(n.toLowerCase()))) {
-      return q.value || "";
+      const val = q.value;
+      if (Array.isArray(val)) return val.join(", ");
+      if (val && typeof val === "object") return JSON.stringify(val);
+      return val || "";
     }
   }
   return "";
