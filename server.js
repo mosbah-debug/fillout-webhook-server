@@ -357,9 +357,37 @@ async function syncHubSpotProjects() {
       stageCache[id] = stageId;
     }
 
-    // Write projects tab (full refresh — always current snapshot)
-    await writeTab(sheets, PROJECTS_TAB, projectRows);
-    console.log(`[Projects sync] Wrote ${projectRows.length - 1} rows to "${PROJECTS_TAB}"`);
+// Load existing rows to check what's already there
+const existingRows = await readTab(sheets, PROJECTS_TAB);
+
+// Build a map of projectId → last known stage from the sheet
+const existingStages = {};
+for (let i = 1; i < existingRows.length; i++) {
+  const row = existingRows[i];
+  if (row[0]) existingStages[row[0]] = row[3]; // col A = ID, col D = Stage
+}
+
+// Only write headers if sheet is empty
+if (existingRows.length === 0) {
+  await appendRows(sheets, PROJECTS_TAB, [PROJECTS_HEADERS]);
+}
+
+// Append only new or changed rows
+const rowsToAppend = [];
+for (const row of projectRows.slice(1)) {
+  const id = row[0];
+  const stage = row[3];
+  if (!existingStages[id] || existingStages[id] !== stage) {
+    rowsToAppend.push(row);
+  }
+}
+
+if (rowsToAppend.length) {
+  await appendRows(sheets, PROJECTS_TAB, rowsToAppend);
+  console.log(`[Projects sync] Appended ${rowsToAppend.length} new/changed rows`);
+} else {
+  console.log(`[Projects sync] No changes detected`);
+}
 
     // Ensure Stage Change Log headers exist
     const existingChanges = await readTab(sheets, STAGE_CHANGE_TAB);
