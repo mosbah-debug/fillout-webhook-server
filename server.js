@@ -205,16 +205,11 @@ async function syncInProgress() {
 
     if (!FILLOUT_API_KEY || !FILLOUT_FORM_ID) return;
 
-let offset = 0;
+    let offset = 0;
     const limit = 150;
     let total   = Infinity;
     const all   = [];
-
-    // Read existing submission IDs to avoid duplicates
-    const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
-    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
-console.log(`[Fillout debug] existingIds count: ${existingIds.size}`);
-console.log(`[Fillout debug] first 3 existing IDs:`, [...existingIds].slice(0, 3));
+    const afterDate = new Date("2026-04-22T14:07:26.000Z");
 
     while (offset < total) {
       const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc`;
@@ -226,19 +221,17 @@ console.log(`[Fillout debug] first 3 existing IDs:`, [...existingIds].slice(0, 3
       const responses = data.responses || [];
       if (!responses.length) break;
 
+      let done = false;
       for (const sub of responses) {
-        if (existingIds.has(sub.submissionId)) {
-  console.log(`[Fillout skip] ${sub.submissionId} already exists`);
-  continue;
-}
-console.log(`[Fillout new] ${sub.submissionId}`);
-      all.push({
-  formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-  status: sub.status || "Completed", submissionId: sub.submissionId,
-  timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
-  questions: sub.questions || [],
-});
+        if (new Date(sub.submissionTime) <= afterDate) { done = true; break; }
+        all.push({
+          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+          status: sub.status || "Completed", submissionId: sub.submissionId,
+          timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
+          questions: sub.questions || [],
+        });
       }
+      if (done) break;
       offset += limit;
     }
 
