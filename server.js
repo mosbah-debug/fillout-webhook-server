@@ -213,6 +213,8 @@ let offset = 0;
     // Read existing submission IDs to avoid duplicates
     const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
     const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
+console.log(`[Fillout debug] existingIds count: ${existingIds.size}`);
+console.log(`[Fillout debug] first 3 existing IDs:`, [...existingIds].slice(0, 3));
 
     while (offset < total) {
       const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc`;
