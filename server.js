@@ -272,8 +272,7 @@ async function fetchAllProjects() {
   }
   return projects;
 }
-async function loadStageCache(sheets) { ... }
-async function saveStageCache(sheets, cache) { ... }
+
 // ── PERSISTENT STAGE CACHE (replaces in-memory lastKnownStage) ───────────────
 // Uses a hidden "_stage_cache" tab in Google Sheets to persist stage snapshots
 // across server restarts. Structure: col A = projectId, col B = stageId
