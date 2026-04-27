@@ -331,13 +331,13 @@ async function saveStageCache(sheets, cache) {
   const rows = Object.entries(cache).map(([id, stageId]) => [id, stageId]);
   await writeTab(sheets, CACHE_TAB, rows);
 }
-
-// ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
-// Replace your existing syncHubSpotProjects() function with this one entirely.
 function msToDate(ms) {
   if (!ms) return "";
   return new Date(parseInt(ms)).toISOString().split("T")[0];
 }
+// ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
+// Replace your existing syncHubSpotProjects() function with this one entirely.
+
 
 projectRows.push([
         id, name, pipeline, stage,
