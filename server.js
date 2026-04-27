@@ -405,32 +405,8 @@ async function syncHubSpotProjects() {
       stageCache[id] = stageId;
     }
 
-    const existingRows = await readTab(sheets, PROJECTS_TAB);
-    const existingStages = {};
-    for (let i = 1; i < existingRows.length; i++) {
-      const row = existingRows[i];
-      if (row[0]) existingStages[row[0]] = row[3];
-    }
-
-    if (existingRows.length === 0) {
-      await appendRows(sheets, PROJECTS_TAB, [PROJECTS_HEADERS]);
-    }
-
-    const rowsToAppend = [];
-    for (const row of projectRows.slice(1)) {
-      const id    = row[0];
-      const stage = row[3];
-      if (!existingStages[id] || existingStages[id] !== stage) {
-        rowsToAppend.push(row);
-      }
-    }
-
-    if (rowsToAppend.length) {
-      await appendRows(sheets, PROJECTS_TAB, rowsToAppend);
-      console.log(`[Projects sync] Appended ${rowsToAppend.length} new/changed rows`);
-    } else {
-      console.log(`[Projects sync] No changes detected`);
-    }
+    await writeTab(sheets, PROJECTS_TAB, projectRows);
+    console.log(`[Projects sync] Wrote ${projectRows.length - 1} rows to "${PROJECTS_TAB}"`);
 
     const existingChanges = await readTab(sheets, STAGE_CHANGE_TAB);
     if (!existingChanges.length || existingChanges[0][0] !== "Timestamp") {
@@ -454,6 +430,8 @@ async function syncHubSpotProjects() {
     console.error("[Projects sync error]", err.message);
   }
 }
+
+// ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
 
 // ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
 app.post("/webhook/hubspot", async (req, res) => {
