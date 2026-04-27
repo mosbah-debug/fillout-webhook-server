@@ -333,7 +333,8 @@ async function saveStageCache(sheets, cache) {
 }
 function msToDate(ms) {
   if (!ms) return "";
-  return new Date(parseInt(ms)).toISOString().split("T")[0];
+  const d = new Date(parseInt(ms));
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 // ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
 // Replace your existing syncHubSpotProjects() function with this one entirely.
