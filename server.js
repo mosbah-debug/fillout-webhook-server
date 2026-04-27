@@ -229,7 +229,7 @@ async function syncInProgress() {
         if (new Date(sub.submissionTime) <= afterDate) { done = true; break; }
         all.push({
           formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-          status: sub.status || "Completed", submissionId: sub.submissionId,
+          status: sub.status || "In Progress", submissionId: sub.submissionId,
           timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
           questions: sub.questions || [],
         });
