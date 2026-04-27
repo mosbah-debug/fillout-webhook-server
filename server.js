@@ -252,6 +252,11 @@ const PROJECTS_HEADERS = [
   "FP Owner", "WA Owner", "HubSpot Owner ID",
   "Card Due Date", "Target Due Date",
   "Last Modified", "Created Date",
+  "Date Entered Stage 1", "Date Entered Stage 2", "Date Entered Stage 3",
+  "Date Entered Stage 4", "Date Entered Stage 5", "Date Entered Stage 6",
+  "Date Entered Stage 7", "Date Entered Stage 8", "Date Entered Stage 9",
+  "Date Entered Stage 10", "Date Entered Stage 11", "Date Entered Stage 12",
+  "Date Entered Stage 13",
 ];
 
 const STAGE_CHANGE_TAB     = "Stage Change Log";
@@ -264,11 +269,24 @@ const STAGE_CHANGE_HEADERS = [
 const lastKnownStage = {};
 
 async function fetchAllProjects() {
-  const properties = [
+ const properties = [
     "hs_name", "hs_pipeline", "hs_pipeline_stage",
     "hubspot_owner_id", "fp_owner", "wa_owner",
     "card_due_date_", "hs_target_due_date",
     "hs_lastmodifieddate", "createdate",
+    "hs_date_entered_5163833551",
+    "hs_date_entered_5165603035",
+    "hs_date_entered_5165576441",
+    "hs_date_entered_5165603036",
+    "hs_date_entered_5165603037",
+    "hs_date_entered_5165603038",
+    "hs_date_entered_5165603039",
+    "hs_date_entered_5171109092",
+    "hs_date_entered_5165603040",
+    "hs_date_entered_5165603041",
+    "hs_date_entered_5165603042",
+    "hs_date_entered_5165603043",
+    "hs_date_entered_5165603044",
   ].join(",");
 
   const projects = [];
@@ -316,7 +334,34 @@ async function saveStageCache(sheets, cache) {
 
 // ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
 // Replace your existing syncHubSpotProjects() function with this one entirely.
+function msToDate(ms) {
+  if (!ms) return "";
+  return new Date(parseInt(ms)).toISOString().split("T")[0];
+}
 
+projectRows.push([
+        id, name, pipeline, stage,
+        props.fp_owner || "",
+        props.wa_owner || "",
+        props.hubspot_owner_id || "",
+        props.card_due_date_ || "",
+        props.hs_target_due_date || "",
+        props.hs_lastmodifieddate || "",
+        props.createdate || "",
+        msToDate(props.hs_date_entered_5163833551),
+        msToDate(props.hs_date_entered_5165603035),
+        msToDate(props.hs_date_entered_5165576441),
+        msToDate(props.hs_date_entered_5165603036),
+        msToDate(props.hs_date_entered_5165603037),
+        msToDate(props.hs_date_entered_5165603038),
+        msToDate(props.hs_date_entered_5165603039),
+        msToDate(props.hs_date_entered_5171109092),
+        msToDate(props.hs_date_entered_5165603040),
+        msToDate(props.hs_date_entered_5165603041),
+        msToDate(props.hs_date_entered_5165603042),
+        msToDate(props.hs_date_entered_5165603043),
+        msToDate(props.hs_date_entered_5165603044),
+      ]);
 async function syncHubSpotProjects() {
   try {
     const auth   = getGoogleAuth();
@@ -349,16 +394,7 @@ async function syncHubSpotProjects() {
       const stageId  = props.hs_pipeline_stage || "";
       const stage    = stageLabel(stageId);
 
-      projectRows.push([
-        id, name, pipeline, stage,
-        props.fp_owner || "",
-        props.wa_owner || "",
-        props.hubspot_owner_id || "",
-        props.card_due_date_ || "",
-        props.hs_target_due_date || "",
-        props.hs_lastmodifieddate || "",
-        props.createdate || "",
-      ]);
+      
 
       // Stage change detection — compare against persisted cache
       const cachedStageId = stageCache[id];
