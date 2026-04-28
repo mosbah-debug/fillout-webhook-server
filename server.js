@@ -212,7 +212,12 @@ async function syncInProgress() {
     const limit = 150;
     let total   = Infinity;
     const all   = [];
-    const afterDate = new Date("2026-04-22T15:30:00.000Z");
+    // Read latest timestamp from sheet dynamically
+const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
+const timestamps = existingRows.slice(1).map(r => r[0]).filter(Boolean);
+const lastDate = timestamps.length ? new Date(Math.max(...timestamps.map(t => new Date(t)))) : new Date(0);
+const afterDate = lastDate;
+console.log(`[Fillout sync] Syncing after: ${afterDate.toISOString()}`);
 
     while (offset < total) {
       const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
