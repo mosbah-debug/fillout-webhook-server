@@ -508,18 +508,31 @@ app.post("/webhook/hubspot", async (req, res) => {
 
 // ── FILLOUT WEBHOOK ───────────────────────────────────────────────────────────
 app.post("/webhook/fillout", async (req, res) => {
+  res.json({ success: true });
   try {
     const event        = req.body;
     const eventType    = event.eventType || "submission.completed";
-    console.log(`[Fillout webhook debug]`, JSON.stringify(req.body));
-    const formId       = event.formId || event.form_id || FILLOUT_FORM_ID || "unknown-form";
-    const formName     = event.formName || event.form_name || formId;
     const submissionId = event.submissionId || event.submission_id || "";
-    const questions    = event.questions || event.data?.questions || [];
 
     const status = (eventType === "submission.partial" || eventType === "submission.in_progress")
       ? "In Progress"
       : "Completed";
+
+    // Fetch full submission data from Fillout API
+    let questions = event.questions || event.data?.questions || [];
+    if (submissionId && (!questions.length)) {
+      const apiRes = await fetch(
+        `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions/${submissionId}`,
+        { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } }
+      );
+      if (apiRes.ok) {
+        const data = await apiRes.json();
+        questions = data.questions || [];
+      }
+    }
+
+    const formId   = event.formId || event.form_id || FILLOUT_FORM_ID || "unknown-form";
+    const formName = event.formName || event.form_name || formId;
 
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
@@ -530,11 +543,9 @@ app.post("/webhook/fillout", async (req, res) => {
       timestamp: new Date().toISOString(), questions,
     }]);
 
-    console.log(`[Fillout webhook] ${status} | ${formName}`);
-    res.json({ success: true, status, formName });
+    console.log(`[Fillout webhook] ${status} | ${formName} | ${submissionId}`);
   } catch (err) {
     console.error("[Fillout webhook error]", err.message);
-    res.status(500).json({ error: err.message });
   }
 });
 
