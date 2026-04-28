@@ -212,7 +212,7 @@ async function syncInProgress() {
     const limit = 150;
     let total   = Infinity;
     const all   = [];
-    const afterDate = new Date("2026-04-22T14:07:26.000Z");
+    const afterDate = new Date("2026-04-22T15:30:00.000Z");
 
     while (offset < total) {
       const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
