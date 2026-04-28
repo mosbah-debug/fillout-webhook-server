@@ -340,6 +340,7 @@ function msToDate(ms) {
   if (!ms || ms === "0" || parseInt(ms) === 0) return "";
   const d = new Date(parseInt(ms));
   if (d.getFullYear() < 2020) return "";
+  if (d.getFullYear() === 2026 && d.getMonth() === 3 && d.getDate() === 12) return "";
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 // ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
