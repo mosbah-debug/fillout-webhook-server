@@ -511,6 +511,7 @@ app.post("/webhook/fillout", async (req, res) => {
   try {
     const event        = req.body;
     const eventType    = event.eventType || "submission.completed";
+    console.log(`[Fillout webhook debug]`, JSON.stringify(req.body));
     const formId       = event.formId || event.form_id || FILLOUT_FORM_ID || "unknown-form";
     const formName     = event.formName || event.form_name || formId;
     const submissionId = event.submissionId || event.submission_id || "";
