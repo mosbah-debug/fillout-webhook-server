@@ -235,11 +235,12 @@ async function syncInProgress() {
       for (const sub of responses) {
         if (existingIds.has(sub.submissionId)) break;
         all.push({
-          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-          status: "In Progress", submissionId: sub.submissionId,
-          timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
-          questions: sub.questions || [],
-        });
+  formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+  submissionId: sub.submissionId,
+  timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
+  questions: sub.questions || [],
+  scheduling: sub.scheduling || [],
+});
       }
       offset += limit;
     }
