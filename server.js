@@ -179,7 +179,12 @@ async function batchLogSubmissions(sheets, submissions) {
       now,
       sub.formName || "",
       sub.formId || "",
-      sub.status || "",
+      (() => {
+  if (sub.status) return sub.status;
+  const scheduling = sub.scheduling || [];
+  const meeting = scheduling[0]?.value;
+  return (meeting?.eventStartTime) ? "Completed" : "In Progress";
+})(),
       sub.submissionId || "",
       month,
       extractFilloutField(q, "Before Continuing"),
@@ -208,16 +213,14 @@ async function syncInProgress() {
 
     if (!FILLOUT_API_KEY || !FILLOUT_FORM_ID) return;
 
+    // Read existing submission IDs to prevent duplicates
+    const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
+    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
+
     let offset = 0;
     const limit = 150;
     let total   = Infinity;
     const all   = [];
-    // Read latest timestamp from sheet dynamically
-const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
-const timestamps = existingRows.slice(1).map(r => r[0]).filter(Boolean);
-const lastDate = timestamps.length ? new Date(Math.max(...timestamps.map(t => new Date(t)))) : new Date(0);
-const afterDate = lastDate;
-console.log(`[Fillout sync] Syncing after: ${afterDate.toISOString()}`);
 
     while (offset < total) {
       const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
@@ -229,17 +232,15 @@ console.log(`[Fillout sync] Syncing after: ${afterDate.toISOString()}`);
       const responses = data.responses || [];
       if (!responses.length) break;
 
-      let done = false;
       for (const sub of responses) {
-        if (new Date(sub.submissionTime) <= afterDate) { done = true; break; }
+        if (existingIds.has(sub.submissionId)) break;
         all.push({
           formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-          status: sub.status || "In Progress", submissionId: sub.submissionId,
+          status: "In Progress", submissionId: sub.submissionId,
           timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
           questions: sub.questions || [],
         });
       }
-      if (done) break;
       offset += limit;
     }
 
