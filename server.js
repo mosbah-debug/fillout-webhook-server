@@ -231,13 +231,11 @@ async function syncInProgress() {
 
 const responses = data.responses || [];
 if (offset === 0) console.log(`[Fillout debug] total: ${total}, responses: ${responses.length}`);
+if (!responses.length) break;
 
-      const responses = data.responses || [];
-      if (!responses.length) break;
-
-      for (const sub of responses) {
-        if (existingIds.has(sub.submissionId)) continue;
-if (new Date(sub.submissionTime) < new Date("2026-03-01T00:00:00.000Z")) { continue; }
+for (const sub of responses) {
+  if (existingIds.has(sub.submissionId)) continue;
+  if (new Date(sub.submissionTime) < new Date("2026-03-01T00:00:00.000Z")) { continue; }
         all.push({
   formId: FILLOUT_FORM_ID, formName: "Fillout Form",
   submissionId: sub.submissionId,
