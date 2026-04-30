@@ -223,26 +223,25 @@ async function syncInProgress() {
     const all   = [];
 
     while (offset < total) {
-      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true&afterDate=2026-03-01T00:00:00.000Z&beforeDate=2026-03-25T20:49:30.778Z`;
+      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
       const data = await res.json();
 
       if (offset === 0) total = data.totalResponses ?? 0;
 
-const responses = data.responses || [];
-if (offset === 0) console.log(`[Fillout debug] total: ${total}, responses: ${responses.length}`);
-if (!responses.length) break;
+      const responses = data.responses || [];
+      if (!responses.length) break;
 
-for (const sub of responses) {
-  if (existingIds.has(sub.submissionId)) continue;
-  if (new Date(sub.submissionTime) < new Date("2026-03-01T00:00:00.000Z")) { continue; }
+      for (const sub of responses) {
+        if (existingIds.has(sub.submissionId)) break;
+        if (new Date(sub.submissionTime) < new Date("2026-03-01T00:00:00.000Z")) { break; }
         all.push({
-  formId: FILLOUT_FORM_ID, formName: "Fillout Form",
-  submissionId: sub.submissionId,
-  timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
-  questions: sub.questions || [],
-  scheduling: sub.scheduling || [],
-});
+          formId: FILLOUT_FORM_ID, formName: "Fillout Form",
+          submissionId: sub.submissionId,
+          timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
+          questions: sub.questions || [],
+          scheduling: sub.scheduling || [],
+        });
       }
       offset += limit;
     }
