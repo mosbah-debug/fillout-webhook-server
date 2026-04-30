@@ -548,6 +548,15 @@ app.post("/webhook/fillout", async (req, res) => {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, FILLOUT_LOG_TAB);
     await ensureFilloutHeaders(sheets);
+
+    // Skip if already exists
+    const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
+    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
+    if (existingIds.has(submissionId)) {
+      console.log(`[Fillout webhook] Skipping duplicate: ${submissionId}`);
+      return;
+    }
+
     await batchLogSubmissions(sheets, [{
       formId, formName, status, submissionId,
       timestamp: new Date().toISOString(), questions,
