@@ -223,7 +223,7 @@ async function syncInProgress() {
     const all   = [];
 
     while (offset < total) {
-      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
+      const url = `https://api.fillout.com/v1/api/forms/${FILLOUT_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true&afterDate=2026-03-01T00:00:00.000Z&beforeDate=2026-03-25T20:49:30.778Z`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
       const data = await res.json();
 
