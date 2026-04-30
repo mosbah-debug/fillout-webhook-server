@@ -523,6 +523,10 @@ app.post("/webhook/fillout", async (req, res) => {
     const event        = req.body;
     const eventType    = event.eventType || "submission.completed";
     const submissionId = event.submissionId || event.submission_id || "";
+if (!submissionId) {
+  console.log(`[Fillout webhook] Skipping - no submission ID`);
+  return;
+}
 
     const status = (eventType === "submission.partial" || eventType === "submission.in_progress")
       ? "In Progress"
@@ -549,11 +553,16 @@ app.post("/webhook/fillout", async (req, res) => {
     await ensureTab(sheets, FILLOUT_LOG_TAB);
     await ensureFilloutHeaders(sheets);
 
-    // Skip if already exists
+     // Skip if already exists as Completed
     const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
-    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
-    if (existingIds.has(submissionId)) {
-      console.log(`[Fillout webhook] Skipping duplicate: ${submissionId}`);
+    const existingCompleted = new Set(
+      existingRows.slice(1)
+        .filter(r => r[3] === "Completed")
+        .map(r => r[4])
+        .filter(Boolean)
+    );
+    if (existingCompleted.has(submissionId)) {
+      console.log(`[Fillout webhook] Skipping already completed: ${submissionId}`);
       return;
     }
 
