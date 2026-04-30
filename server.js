@@ -228,6 +228,7 @@ async function syncInProgress() {
       const data = await res.json();
 
       if (offset === 0) total = data.totalResponses ?? 0;
+if (offset === 0) console.log(`[Fillout debug] total: ${total}, responses: ${responses.length}`);
 
       const responses = data.responses || [];
       if (!responses.length) break;
