@@ -233,7 +233,7 @@ async function syncInProgress() {
       if (!responses.length) break;
 
       for (const sub of responses) {
-        if (existingIds.has(sub.submissionId)) break;
+        if (existingIds.has(sub.submissionId)) continue;
 if (new Date(sub.submissionTime) < new Date("2026-03-01T00:00:00.000Z")) { break; }
         all.push({
   formId: FILLOUT_FORM_ID, formName: "Fillout Form",
