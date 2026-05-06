@@ -41,6 +41,28 @@ const PIPELINES_DATA = [
       { id: "4225526006", label: "OLD Stage 5 (archived)" },
     ],
   },
+{
+  id: "3364165843",
+  label: "Operations Tickets",
+  stages: [
+    { id: "5272068333", label: "Suggestions" },
+    { id: "4609840367", label: "To Do" },
+    { id: "4609840368", label: "Doing" },
+    { id: "4609840369", label: "Review" },
+    { id: "4609840370", label: "Completed" },
+    { id: "4609840371", label: "Blocked" },
+    { id: "4609840372", label: "Backlog" },
+  ],
+},
+];
+
+const OPS_TAB = "Operations Tickets";
+const OPS_HEADERS = [
+  "Project ID", "Project Name", "Pipeline", "Stage",
+  "Owner", "Created Date", "Last Modified", "Due Date",
+  "Date Entered Suggestions", "Date Entered To Do", "Date Entered Doing",
+  "Date Entered Review", "Date Entered Completed", "Date Entered Blocked",
+  "Date Entered Backlog",
 ];
 
 // Build flat stageId → { label, pipelineId, pipelineLabel } lookup
@@ -349,6 +371,55 @@ function msToDate(ms) {
 // ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
 // Replace your existing syncHubSpotProjects() function with this one entirely.
 
+async function fetchAllOpsTickets() {
+  const properties = [
+    "hs_name", "hs_pipeline", "hs_pipeline_stage",
+    "hubspot_owner_id", "createdate", "hs_lastmodifieddate",
+    "hs_due_date",
+    "hs_date_entered_5272068333",
+    "hs_date_entered_4609840367",
+    "hs_date_entered_4609840368",
+    "hs_date_entered_4609840369",
+    "hs_date_entered_4609840370",
+    "hs_date_entered_4609840371",
+    "hs_date_entered_4609840372",
+  ].join(",");
+
+  const tickets = [];
+  let after = null;
+
+  while (true) {
+    const body = {
+      filterGroups: [{ filters: [{ propertyName: "hs_pipeline", operator: "EQ", value: "3364165843" }] }],
+      properties: properties.split(","),
+      limit: 100,
+      ...(after ? { after } : {}),
+    };
+
+    const res = await fetch("https://api.hubapi.com/crm/v3/objects/projects/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`HubSpot ops tickets API error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    tickets.push(...(data.results || []));
+    if (data.paging?.next?.after) {
+      after = data.paging.next.after;
+    } else {
+      break;
+    }
+  }
+  return tickets;
+}
 
 async function syncHubSpotProjects() {
   try {
@@ -439,6 +510,46 @@ async function syncHubSpotProjects() {
 
   } catch (err) {
     console.error("[Projects sync error]", err.message);
+  }
+}
+
+async function syncOperationsTickets() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, OPS_TAB);
+
+    const tickets = await fetchAllOpsTickets();
+    console.log(`[Ops sync] Fetched ${tickets.length} tickets`);
+
+    const rows = [OPS_HEADERS];
+
+    for (const t of tickets) {
+      const props = t.properties || {};
+      rows.push([
+        t.id,
+        props.hs_name || "",
+        "Operations Tickets",
+        stageLabel(props.hs_pipeline_stage),
+        props.hubspot_owner_id || "",
+        props.createdate ? msToDate(new Date(props.createdate).getTime()) : "",
+        props.hs_lastmodifieddate ? msToDate(new Date(props.hs_lastmodifieddate).getTime()) : "",
+        props.hs_due_date || "",
+        msToDate(props.hs_date_entered_5272068333),
+        msToDate(props.hs_date_entered_4609840367),
+        msToDate(props.hs_date_entered_4609840368),
+        msToDate(props.hs_date_entered_4609840369),
+        msToDate(props.hs_date_entered_4609840370),
+        msToDate(props.hs_date_entered_4609840371),
+        msToDate(props.hs_date_entered_4609840372),
+      ]);
+    }
+
+    await writeTab(sheets, OPS_TAB, rows);
+    console.log(`[Ops sync] Wrote ${tickets.length} rows to "${OPS_TAB}"`);
+
+  } catch (err) {
+    console.error("[Ops sync error]", err.message);
   }
 }
 
@@ -588,6 +699,11 @@ app.get("/sync-projects", async (req, res) => {
   res.json({ success: true, message: "HubSpot Projects sync started in background" });
 });
 
+app.get("/sync-ops", async (req, res) => {
+  syncOperationsTickets();
+  res.json({ success: true, message: "Operations Tickets sync started in background" });
+});
+
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
@@ -595,9 +711,11 @@ app.get("/health", (_, res) => res.json({ status: "ok" }));
 setTimeout(() => {
   syncInProgress();
   syncHubSpotProjects();
+  syncOperationsTickets();
 }, 10_000);
 
 setInterval(syncInProgress,       60 * 60 * 1000); // every hour
 setInterval(syncHubSpotProjects,  60 * 60 * 1000); // every hour
+setInterval(syncOperationsTickets,  60 * 60 * 1000); // every hour  ← ADD THIS
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
