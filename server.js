@@ -13,6 +13,7 @@ const HUBSPOT_TOKEN    = process.env.HUBSPOT_TOKEN;
 const SPREADSHEET_ID   = process.env.SPREADSHEET_ID;
 const FILLOUT_API_KEY  = process.env.FILLOUT_API_KEY;
 const FILLOUT_FORM_ID  = process.env.FILLOUT_FORM_ID;
+const WEBINAR_FORM_ID  = process.env.WEBINAR_FORM_ID;
 
 // ── PIPELINE / STAGE MAP (baked in from confirmed API response) ──────────────
 // Structure: stageId → { label, pipelineLabel }
@@ -168,6 +169,16 @@ const FILLOUT_LOG_HEADERS = [
   "(OPTIONAL) Please share any additional information related to your goals or pain points you think would be helpful",
 ];
 
+const WEBINAR_TAB     = "Webinar";
+const WEBINAR_HEADERS = [
+  "Timestamp", "Form Name", "Form ID", "Status", "Submission ID", "Month",
+  "First Name", "Last Name", "Email", "Mobile Phone Number",
+  "utm_source", "utm_content",
+  "Will the retirement planning be just yourself or include a spouse/partner",
+  "About how much have you saved for retirement?",
+  "Are you retired, looking to retire in the next 5 years, or looking to retire in the next 10 years?",
+];
+
 async function ensureFilloutHeaders(sheets) {
   const rows = await readTab(sheets, FILLOUT_LOG_TAB);
   if (!rows.length || rows[0][0] !== "Timestamp") {
@@ -179,7 +190,46 @@ async function ensureFilloutHeaders(sheets) {
     });
   }
 }
+async function ensureWebinarHeaders(sheets) {
+  const rows = await readTab(sheets, WEBINAR_TAB);
+  if (!rows.length || rows[0][0] !== "Timestamp") {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${WEBINAR_TAB}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [WEBINAR_HEADERS] },
+    });
+  }
+}
 
+async function batchLogWebinar(sheets, submissions) {
+  const rows = submissions.map(sub => {
+    const q   = sub.questions || [];
+    const now = sub.timestamp || new Date().toISOString();
+    const month = new Date(now).toLocaleString("default", { month: "long", year: "numeric" });
+    const scheduling = sub.scheduling || [];
+    const meeting = scheduling[0]?.value;
+    const status = sub.status || (meeting?.eventStartTime ? "Completed" : "In Progress");
+    return [
+      now,
+      sub.formName || "",
+      sub.formId || "",
+      status,
+      sub.submissionId || "",
+      month,
+      extractFilloutField(q, "First Name", "firstname"),
+      extractFilloutField(q, "Last Name", "lastname"),
+      extractFilloutField(q, "Email"),
+      extractFilloutField(q, "Mobile Phone", "phone"),
+      extractFilloutField(q, "utm_source"),
+      extractFilloutField(q, "utm_content"),
+      extractFilloutField(q, "spouse", "partner"),
+      extractFilloutField(q, "how much have you saved"),
+      extractFilloutField(q, "retired", "looking to retire"),
+    ];
+  });
+  await appendRows(sheets, WEBINAR_TAB, rows);
+}
 function extractFilloutField(questions, ...names) {
   for (const q of questions) {
     if (names.some(n => q.name?.toLowerCase().includes(n.toLowerCase()))) {
@@ -225,6 +275,52 @@ async function batchLogSubmissions(sheets, submissions) {
   await appendRows(sheets, FILLOUT_LOG_TAB, rows);
 }
 
+async function syncWebinar() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, WEBINAR_TAB);
+    await ensureWebinarHeaders(sheets);
+
+    if (!FILLOUT_API_KEY || !WEBINAR_FORM_ID) return;
+
+    const existingRows = await readTab(sheets, WEBINAR_TAB);
+    const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
+
+    let offset = 0;
+    const limit = 150;
+    let total   = Infinity;
+    const all   = [];
+
+    while (offset < total) {
+      const url = `https://api.fillout.com/v1/api/forms/${WEBINAR_FORM_ID}/submissions?limit=${limit}&offset=${offset}&sort=desc&includePartial=true`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${FILLOUT_API_KEY}` } });
+      const data = await res.json();
+
+      if (offset === 0) total = data.totalResponses ?? 0;
+
+      const responses = data.responses || [];
+      if (!responses.length) break;
+
+      for (const sub of responses) {
+        if (existingIds.has(sub.submissionId)) break;
+        all.push({
+          formId: WEBINAR_FORM_ID, formName: "Webinar Form",
+          submissionId: sub.submissionId,
+          timestamp: sub.submissionTime || sub.lastUpdatedAt || new Date().toISOString(),
+          questions: sub.questions || [],
+          scheduling: sub.scheduling || [],
+        });
+      }
+      offset += limit;
+    }
+
+    if (all.length) await batchLogWebinar(sheets, all);
+    console.log(`[Webinar sync] ${all.length} submissions synced`);
+  } catch (err) {
+    console.error("[Webinar sync error]", err.message);
+  }
+}
 
 async function syncInProgress() {
   try {
@@ -688,6 +784,49 @@ if (!submissionId) {
   }
 });
 
+app.post("/webhook/webinar", async (req, res) => {
+  res.json({ success: true });
+  try {
+    const event        = req.body;
+    const eventType    = event.eventType || "submission.completed";
+    const submissionId = event.submissionId || event.submission_id || "";
+
+    if (!submissionId) return;
+
+    const status = (eventType === "submission.partial" || eventType === "submission.in_progress")
+      ? "In Progress"
+      : "Completed";
+
+    const formId   = event.formId || WEBINAR_FORM_ID || "unknown-form";
+    const formName = event.formName || "Webinar Form";
+    const questions = event.questions || [];
+    const scheduling = event.scheduling || [];
+
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, WEBINAR_TAB);
+    await ensureWebinarHeaders(sheets);
+
+    const existingRows = await readTab(sheets, WEBINAR_TAB);
+    const existingCompleted = new Set(
+      existingRows.slice(1)
+        .filter(r => r[3] === "Completed")
+        .map(r => r[4])
+        .filter(Boolean)
+    );
+    if (existingCompleted.has(submissionId)) return;
+
+    await batchLogWebinar(sheets, [{
+      formId, formName, status, submissionId,
+      timestamp: new Date().toISOString(), questions, scheduling,
+    }]);
+
+    console.log(`[Webinar webhook] ${status} | ${submissionId}`);
+  } catch (err) {
+    console.error("[Webinar webhook error]", err.message);
+  }
+});
+
 // ── MANUAL ENDPOINTS ──────────────────────────────────────────────────────────
 app.get("/sync", async (req, res) => {
   syncInProgress();
@@ -704,6 +843,11 @@ app.get("/sync-ops", async (req, res) => {
   res.json({ success: true, message: "Operations Tickets sync started in background" });
 });
 
+app.get("/sync-webinar", async (req, res) => {
+  syncWebinar();
+  res.json({ success: true, message: "Webinar sync started in background" });
+});
+
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
@@ -712,10 +856,13 @@ setTimeout(() => {
   syncInProgress();
   syncHubSpotProjects();
   syncOperationsTickets();
+  syncWebinar();
 }, 10_000);
 
 setInterval(syncInProgress,       60 * 60 * 1000); // every hour
 setInterval(syncHubSpotProjects,  60 * 60 * 1000); // every hour
 setInterval(syncOperationsTickets,  60 * 60 * 1000); // every hour  ← ADD THIS
+setInterval(syncWebinar, 60 * 60 * 1000); // every hour
+
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
