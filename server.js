@@ -14,6 +14,7 @@ const SPREADSHEET_ID   = process.env.SPREADSHEET_ID;
 const FILLOUT_API_KEY  = process.env.FILLOUT_API_KEY;
 const FILLOUT_FORM_ID  = process.env.FILLOUT_FORM_ID;
 const WEBINAR_FORM_ID  = process.env.WEBINAR_FORM_ID;
+const WEBINAR_FORM_HS_ID = process.env.WEBINAR_FORM_HS_ID;
 
 // ── PIPELINE / STAGE MAP (baked in from confirmed API response) ──────────────
 // Structure: stageId → { label, pipelineLabel }
@@ -55,6 +56,12 @@ const PIPELINES_DATA = [
     { id: "4609840372", label: "Backlog" },
   ],
 },
+];
+
+const WEBINAR_TAB     = "Webinar HS";
+const WEBINAR_HEADERS = [
+  "Submission ID", "Submitted At", "Month",
+  "First Name", "Email", "UTM Source", "UTM Content", "Page URL",
 ];
 
 const OPS_TAB = "Operations Tickets";
@@ -649,6 +656,81 @@ async function syncOperationsTickets() {
   }
 }
 
+async function syncWebinarForm() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, WEBINAR_TAB);
+
+    // Load existing submission IDs to avoid duplicates
+    const existing = await readTab(sheets, WEBINAR_TAB);
+    const existingIds = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
+
+    // Ensure headers
+    if (!existing.length || existing[0][0] !== "Submission ID") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${WEBINAR_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [WEBINAR_HEADERS] },
+      });
+    }
+
+    let after     = null;
+    const newRows = [];
+
+    while (true) {
+      const url = `https://api.hubapi.com/form-integrations/v1/submissions/forms/${WEBINAR_FORM_HS_ID}?limit=50${after ? `&after=${after}` : ""}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`HubSpot form submissions error ${res.status}: ${err}`);
+      }
+      const data = await res.json();
+
+      for (const sub of data.results || []) {
+        const id = sub.conversionId;
+        if (existingIds.has(id)) continue;
+
+        const fields = {};
+        for (const v of sub.values || []) fields[v.name] = v.value;
+
+        const submittedAt = new Date(sub.submittedAt).toISOString();
+        const month = new Date(sub.submittedAt).toLocaleString("default", { month: "long", year: "numeric" });
+
+        newRows.push([
+          id,
+          submittedAt,
+          month,
+          fields.firstname || "",
+          fields.email || "",
+          fields.utm_source || "",
+          fields.utm_content || "",
+          sub.pageUrl || "",
+        ]);
+      }
+
+      if (data.paging?.next?.after) {
+        after = data.paging.next.after;
+      } else {
+        break;
+      }
+    }
+
+    if (newRows.length) {
+      await appendRows(sheets, WEBINAR_TAB, newRows);
+      console.log(`[Webinar sync] Appended ${newRows.length} new submissions`);
+    } else {
+      console.log(`[Webinar sync] No new submissions`);
+    }
+
+  } catch (err) {
+    console.error("[Webinar sync error]", err.message);
+  }
+}
+
 // ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
 
 // ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
@@ -848,6 +930,11 @@ app.get("/sync-webinar", async (req, res) => {
   res.json({ success: true, message: "Webinar sync started in background" });
 });
 
+app.get("/sync-webinar-hs", async (req, res) => {
+  syncWebinarForm();
+  res.json({ success: true, message: "Webinar HS form sync started in background" });
+});
+
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
@@ -857,12 +944,15 @@ setTimeout(() => {
   syncHubSpotProjects();
   syncOperationsTickets();
   syncWebinar();
+  syncWebinarForm(); 
 }, 10_000);
 
 setInterval(syncInProgress,       60 * 60 * 1000); // every hour
 setInterval(syncHubSpotProjects,  60 * 60 * 1000); // every hour
 setInterval(syncOperationsTickets,  60 * 60 * 1000); // every hour  ← ADD THIS
 setInterval(syncWebinar, 60 * 60 * 1000); // every hour
+setInterval(syncWebinarForm, 60 * 60 * 1000); // every hour
+
 
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
