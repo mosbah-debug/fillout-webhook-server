@@ -58,8 +58,8 @@ const PIPELINES_DATA = [
 },
 ];
 
-const WEBINAR_TAB     = "Webinar HS";
-const WEBINAR_HEADERS = [
+const WEBINAR_HS_TAB     = "Webinar HS";
+const WEBINAR_HS_HEADERS = [
   "Submission ID", "Submitted At", "Month",
   "First Name", "Email", "UTM Source", "UTM Content", "Page URL",
 ];
@@ -660,19 +660,19 @@ async function syncWebinarForm() {
   try {
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
-    await ensureTab(sheets, WEBINAR_TAB);
+    await ensureTab(sheets, WEBINAR_HS_TAB);
 
     // Load existing submission IDs to avoid duplicates
-    const existing = await readTab(sheets, WEBINAR_TAB);
+    const existing = await readTab(sheets, WEBINAR_HS_TAB);
     const existingIds = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
 
     // Ensure headers
     if (!existing.length || existing[0][0] !== "Submission ID") {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
-        range: `${WEBINAR_TAB}!A1`,
+        range: `${WEBINAR_HS_TAB}!A1`,
         valueInputOption: "RAW",
-        requestBody: { values: [WEBINAR_HEADERS] },
+        requestBody: { values: [WEBINAR_HS_HEADERS] },
       });
     }
 
@@ -720,7 +720,7 @@ async function syncWebinarForm() {
     }
 
     if (newRows.length) {
-      await appendRows(sheets, WEBINAR_TAB, newRows);
+      await appendRows(sheets, WEBINAR_HS_TAB, newRows);
       console.log(`[Webinar sync] Appended ${newRows.length} new submissions`);
     } else {
       console.log(`[Webinar sync] No new submissions`);
