@@ -114,16 +114,20 @@ function getGoogleAuth() {
 
 // Ensure a tab exists; if not, create it
 async function ensureTab(sheets, tabName) {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-  const exists = meta.data.sheets.some(s => s.properties.title === tabName);
-  if (!exists) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: tabName } } }],
-      },
-    });
-    console.log(`Created tab: ${tabName}`);
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const exists = meta.data.sheets.some(s => s.properties.title === tabName);
+    if (!exists) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: tabName } } }],
+        },
+      });
+      console.log(`Created tab: ${tabName}`);
+    }
+  } catch (err) {
+    console.error(`[ensureTab error] ${tabName}:`, err.message);
   }
 }
 
