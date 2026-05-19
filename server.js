@@ -15,6 +15,9 @@ const FILLOUT_API_KEY  = process.env.FILLOUT_API_KEY;
 const FILLOUT_FORM_ID  = process.env.FILLOUT_FORM_ID;
 const WEBINAR_FORM_ID  = process.env.WEBINAR_FORM_ID;
 const WEBINAR_FORM_HS_ID = process.env.WEBINAR_FORM_HS_ID;
+const VIDALYTICS_API_KEY = process.env.VIDALYTICS_API_KEY;
+const VIDALYTICS_VIDEO_ID = process.env.VIDALYTICS_VIDEO_ID;
+
 const LP_TAB     = "HS Page Visits";
 const LP_PAGE_ID = "403572489414";
 const LP_HEADERS = [
@@ -22,8 +25,7 @@ const LP_HEADERS = [
   "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
 ];
 
-// ── PIPELINE / STAGE MAP (baked in from confirmed API response) ──────────────
-// Structure: stageId → { label, pipelineLabel }
+// ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
 
 const PIPELINES_DATA = [
@@ -49,19 +51,19 @@ const PIPELINES_DATA = [
       { id: "4225526006", label: "OLD Stage 5 (archived)" },
     ],
   },
-{
-  id: "3364165843",
-  label: "Operations Tickets",
-  stages: [
-    { id: "5272068333", label: "Suggestions" },
-    { id: "4609840367", label: "To Do" },
-    { id: "4609840368", label: "Doing" },
-    { id: "4609840369", label: "Review" },
-    { id: "4609840370", label: "Completed" },
-    { id: "4609840371", label: "Blocked" },
-    { id: "4609840372", label: "Backlog" },
-  ],
-},
+  {
+    id: "3364165843",
+    label: "Operations Tickets",
+    stages: [
+      { id: "5272068333", label: "Suggestions" },
+      { id: "4609840367", label: "To Do" },
+      { id: "4609840368", label: "Doing" },
+      { id: "4609840369", label: "Review" },
+      { id: "4609840370", label: "Completed" },
+      { id: "4609840371", label: "Blocked" },
+      { id: "4609840372", label: "Backlog" },
+    ],
+  },
 ];
 
 const WEBINAR_HS_TAB     = "Webinar HS";
@@ -79,8 +81,7 @@ const OPS_HEADERS = [
   "Date Entered Backlog",
 ];
 
-// Build flat stageId → { label, pipelineId, pipelineLabel } lookup
-const PIPELINE_MAP = {}; // pipelineId → label
+const PIPELINE_MAP = {};
 for (const pipeline of PIPELINES_DATA) {
   PIPELINE_MAP[pipeline.id] = pipeline.label;
   for (const stage of pipeline.stages) {
@@ -111,8 +112,6 @@ function getGoogleAuth() {
 }
 
 // ── SHEET HELPERS ─────────────────────────────────────────────────────────────
-
-// Ensure a tab exists; if not, create it
 async function ensureTab(sheets, tabName) {
   try {
     const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
@@ -131,7 +130,6 @@ async function ensureTab(sheets, tabName) {
   }
 }
 
-// Read all rows from a tab (returns array of arrays)
 async function readTab(sheets, tabName) {
   try {
     const res = await sheets.spreadsheets.values.get({
@@ -144,7 +142,6 @@ async function readTab(sheets, tabName) {
   }
 }
 
-// Clear a tab and write fresh rows
 async function writeTab(sheets, tabName, rows) {
   await sheets.spreadsheets.values.clear({
     spreadsheetId: SPREADSHEET_ID,
@@ -160,7 +157,6 @@ async function writeTab(sheets, tabName, rows) {
   }
 }
 
-// Append rows to a tab
 async function appendRows(sheets, tabName, rows) {
   if (!rows.length) return;
   await sheets.spreadsheets.values.append({
@@ -247,6 +243,7 @@ async function batchLogWebinar(sheets, submissions) {
   });
   await appendRows(sheets, WEBINAR_TAB, rows);
 }
+
 function extractFilloutField(questions, ...names) {
   for (const q of questions) {
     if (names.some(n => q.name?.toLowerCase().includes(n.toLowerCase()))) {
@@ -269,11 +266,11 @@ async function batchLogSubmissions(sheets, submissions) {
       sub.formName || "",
       sub.formId || "",
       (() => {
-  if (sub.status) return sub.status;
-  const scheduling = sub.scheduling || [];
-  const meeting = scheduling[0]?.value;
-  return (meeting?.eventStartTime) ? "Completed" : "In Progress";
-})(),
+        if (sub.status) return sub.status;
+        const scheduling = sub.scheduling || [];
+        const meeting = scheduling[0]?.value;
+        return (meeting?.eventStartTime) ? "Completed" : "In Progress";
+      })(),
       sub.submissionId || "",
       month,
       extractFilloutField(q, "Before Continuing"),
@@ -348,7 +345,6 @@ async function syncInProgress() {
 
     if (!FILLOUT_API_KEY || !FILLOUT_FORM_ID) return;
 
-    // Read existing submission IDs to prevent duplicates
     const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
     const existingIds = new Set(existingRows.slice(1).map(r => r[4]).filter(Boolean));
 
@@ -408,11 +404,10 @@ const STAGE_CHANGE_HEADERS = [
   "Pipeline", "From Stage", "To Stage", "Source",
 ];
 
-// In-memory cache of last known stages: projectId → stageId
 const lastKnownStage = {};
 
 async function fetchAllProjects() {
- const properties = [
+  const properties = [
     "hs_name", "hs_pipeline", "hs_pipeline_stage",
     "hubspot_owner_id", "fp_owner", "wa_owner",
     "card_due_date_", "hs_target_due_date",
@@ -455,10 +450,6 @@ async function fetchAllProjects() {
   return projects;
 }
 
-// ── PERSISTENT STAGE CACHE (replaces in-memory lastKnownStage) ───────────────
-// Uses a hidden "_stage_cache" tab in Google Sheets to persist stage snapshots
-// across server restarts. Structure: col A = projectId, col B = stageId
-
 const CACHE_TAB = "HubSpot Cache";
 
 async function loadStageCache(sheets) {
@@ -474,6 +465,7 @@ async function saveStageCache(sheets, cache) {
   const rows = Object.entries(cache).map(([id, stageId]) => [id, stageId]);
   await writeTab(sheets, CACHE_TAB, rows);
 }
+
 function msToDate(ms) {
   if (!ms || ms === "0" || parseInt(ms) === 0) return "";
   const d = new Date(parseInt(ms));
@@ -481,8 +473,6 @@ function msToDate(ms) {
   if (d.getFullYear() === 2026 && d.getMonth() === 3 && d.getDate() === 12) return "";
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
-// ── UPDATED syncHubSpotProjects() ─────────────────────────────────────────────
-// Replace your existing syncHubSpotProjects() function with this one entirely.
 
 async function fetchAllOpsTickets() {
   const properties = [
@@ -672,11 +662,9 @@ async function syncWebinarForm() {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, WEBINAR_HS_TAB);
 
-    // Load existing submission IDs to avoid duplicates
     const existing = await readTab(sheets, WEBINAR_HS_TAB);
     const existingIds = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
 
-    // Ensure headers
     if (!existing.length || existing[0][0] !== "Submission ID") {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -711,9 +699,7 @@ async function syncWebinarForm() {
         const month = new Date(sub.submittedAt).toLocaleString("default", { month: "long", year: "numeric" });
 
         newRows.push([
-          id,
-          submittedAt,
-          month,
+          id, submittedAt, month,
           fields.firstname || "",
           fields.email || "",
           fields.utm_source || "",
@@ -747,11 +733,9 @@ async function syncLandingPageAnalytics() {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, LP_TAB);
 
-    // Load existing dates to avoid duplicates
     const existing = await readTab(sheets, LP_TAB);
     const existingDates = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
 
-    // Ensure headers
     if (!existing.length || existing[0][0] !== "Date") {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -761,7 +745,6 @@ async function syncLandingPageAnalytics() {
       });
     }
 
-    // Fetch last 30 days
     const end   = new Date();
     const start = new Date();
     start.setDate(start.getDate() - 30);
@@ -797,7 +780,6 @@ async function syncLandingPageAnalytics() {
       ]);
     }
 
-    // Sort rows by date ascending
     newRows.sort((a, b) => a[0].localeCompare(b[0]));
 
     if (newRows.length) {
@@ -811,11 +793,151 @@ async function syncLandingPageAnalytics() {
     console.error("[LP Analytics error]", err.message);
   }
 }
-// ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
 
-// ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
+// ── VIDALYTICS SYNC ───────────────────────────────────────────────────────────
+const VIDALYTICS_TAB     = "Vidalytics";
+const VIDALYTICS_HEADERS = [
+  "Date", "Plays", "Unique Plays", "Play Rate (%)", "Unmute Rate (%)", "Avg Watch Duration (s)",
+];
+
+/**
+ * Calculate average watch duration in seconds from drop-off data.
+ * The drop-off endpoint returns { "0": N, "5": N, "10": N, ... }
+ * where each key is a second timestamp and value is viewers still watching.
+ * We calculate: sum of (viewers who dropped between t and t+interval) * midpoint_time
+ * divided by total plays = weighted average watch duration.
+ */
+function calcAvgWatchDuration(dropOffData, totalPlays) {
+  if (!dropOffData || !totalPlays || totalPlays === 0) return 0;
+
+  // Sort timestamps numerically
+  const seconds = Object.keys(dropOffData)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  if (seconds.length === 0) return 0;
+
+  let weightedSum = 0;
+
+  for (let i = 0; i < seconds.length; i++) {
+    const t       = seconds[i];
+    const tNext   = seconds[i + 1];
+    const viewers = dropOffData[String(t)] || 0;
+
+    if (tNext !== undefined) {
+      // viewers who dropped between t and tNext watched until ~t seconds
+      const dropped = viewers - (dropOffData[String(tNext)] || 0);
+      if (dropped > 0) weightedSum += dropped * t;
+    } else {
+      // last segment: remaining viewers watched to the end
+      weightedSum += viewers * t;
+    }
+  }
+
+  return Math.round(weightedSum / totalPlays);
+}
+
+async function syncVidalytics() {
+  try {
+    if (!VIDALYTICS_API_KEY || !VIDALYTICS_VIDEO_ID) {
+      console.log("[Vidalytics sync] Skipping — VIDALYTICS_API_KEY or VIDALYTICS_VIDEO_ID not set");
+      return;
+    }
+
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, VIDALYTICS_TAB);
+
+    // Ensure headers
+    const existing = await readTab(sheets, VIDALYTICS_TAB);
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${VIDALYTICS_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [VIDALYTICS_HEADERS] },
+      });
+    }
+
+    // Build set of dates already in the sheet
+    const existingDates = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
+
+    // Build list of dates from launch (May 17 2026) through yesterday
+    const LAUNCH_DATE = "2026-05-17";
+    const yesterday   = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+    const datesToFetch = [];
+    const cursor = new Date(LAUNCH_DATE);
+    const end    = new Date(yesterdayStr);
+    while (cursor <= end) {
+      const d = cursor.toISOString().split("T")[0];
+      if (!existingDates.has(d)) datesToFetch.push(d);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    if (datesToFetch.length === 0) {
+      console.log("[Vidalytics sync] All dates up to date, nothing to fetch");
+      return;
+    }
+
+    console.log(`[Vidalytics sync] Fetching ${datesToFetch.length} date(s): ${datesToFetch[0]} → ${datesToFetch[datesToFetch.length - 1]}`);
+
+    const vidHeaders = {
+      "X-API-Key": VIDALYTICS_API_KEY,
+      "Accept": "application/json",
+    };
+
+    const newRows = [];
+
+    for (const dateStr of datesToFetch) {
+      // 1) Fetch total stats for this date
+      const statsUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}?dateFrom=${dateStr}&dateTo=${dateStr}`;
+      const statsRes = await fetch(statsUrl, { headers: vidHeaders });
+      if (!statsRes.ok) {
+        console.warn(`[Vidalytics sync] Stats fetch failed for ${dateStr}: ${statsRes.status}`);
+        continue;
+      }
+      const statsData = await statsRes.json();
+      const stats = statsData.content || {};
+
+      const plays       = stats.plays       ?? 0;
+      const playsUnique = stats.playsUnique ?? 0;
+      const playRate    = stats.playRate    != null ? Math.round(stats.playRate * 100) / 100 : 0;
+      const unmuteRate  = stats.unmuteRate  != null ? Math.round(stats.unmuteRate * 100) / 100 : 0;
+
+      // 2) Fetch drop-off data to calculate avg watch duration
+      let avgWatchDuration = 0;
+      if (plays > 0) {
+        const dropUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}/drop-off?dateFrom=${dateStr}&dateTo=${dateStr}`;
+        const dropRes = await fetch(dropUrl, { headers: vidHeaders });
+        if (dropRes.ok) {
+          const dropData = await dropRes.json();
+          const watches = dropData.content?.all?.watches || {};
+          avgWatchDuration = calcAvgWatchDuration(watches, plays);
+        } else {
+          console.warn(`[Vidalytics sync] Drop-off fetch failed for ${dateStr}: ${dropRes.status}`);
+        }
+      }
+
+      newRows.push([dateStr, plays, playsUnique, playRate, unmuteRate, avgWatchDuration]);
+      console.log(`[Vidalytics sync] ${dateStr} → plays=${plays}, unique=${playsUnique}, playRate=${playRate}%, unmuteRate=${unmuteRate}%, avgWatch=${avgWatchDuration}s`);
+    }
+
+    if (newRows.length) {
+      await appendRows(sheets, VIDALYTICS_TAB, newRows);
+      console.log(`[Vidalytics sync] Appended ${newRows.length} row(s)`);
+    }
+
+  } catch (err) {
+    console.error("[Vidalytics sync error]", err.message);
+  }
+}
+
+// ── HUBSPOT WEBHOOK ───────────────────────────────────────────────────────────
 app.post("/webhook/hubspot", async (req, res) => {
-  res.sendStatus(200); // acknowledge immediately
+  res.sendStatus(200);
 
   try {
     const events = Array.isArray(req.body) ? req.body : [req.body];
@@ -829,7 +951,6 @@ app.post("/webhook/hubspot", async (req, res) => {
       const objectId    = String(event.objectId || event.id || "");
       const propertyName = event.propertyName || event.property || "";
 
-      // Only process pipeline stage changes
       if (!propertyName.includes("pipeline_stage") && propertyName !== "hs_pipeline_stage") continue;
 
       const newStageId = event.propertyValue || event.value || "";
@@ -838,7 +959,6 @@ app.post("/webhook/hubspot", async (req, res) => {
       const now   = new Date().toISOString();
       const month = new Date().toLocaleString("default", { month: "long", year: "numeric" });
 
-      // Try to get project name from HubSpot
       let projectName = "";
       let pipelineId  = "";
       try {
@@ -861,11 +981,9 @@ app.post("/webhook/hubspot", async (req, res) => {
         "Webhook",
       ]);
 
-      // Update in-memory cache
       lastKnownStage[objectId] = newStageId;
     }
 
-    // Ensure headers
     const existing = await readTab(sheets, STAGE_CHANGE_TAB);
     if (!existing.length || existing[0][0] !== "Timestamp") {
       await sheets.spreadsheets.values.update({
@@ -892,16 +1010,15 @@ app.post("/webhook/fillout", async (req, res) => {
     const event        = req.body;
     const eventType    = event.eventType || "submission.completed";
     const submissionId = event.submissionId || event.submission_id || "";
-if (!submissionId) {
-  console.log(`[Fillout webhook] Skipping - no submission ID`);
-  return;
-}
+    if (!submissionId) {
+      console.log(`[Fillout webhook] Skipping - no submission ID`);
+      return;
+    }
 
     const status = (eventType === "submission.partial" || eventType === "submission.in_progress")
       ? "In Progress"
       : "Completed";
 
-    // Fetch full submission data from Fillout API
     let questions = event.questions || event.data?.questions || [];
     if (submissionId && (!questions.length)) {
       const apiRes = await fetch(
@@ -922,7 +1039,6 @@ if (!submissionId) {
     await ensureTab(sheets, FILLOUT_LOG_TAB);
     await ensureFilloutHeaders(sheets);
 
-     // Skip if already exists as Completed
     const existingRows = await readTab(sheets, FILLOUT_LOG_TAB);
     const existingCompleted = new Set(
       existingRows.slice(1)
@@ -1015,31 +1131,35 @@ app.get("/sync-webinar-hs", async (req, res) => {
   res.json({ success: true, message: "Webinar HS form sync started in background" });
 });
 
-app.get("/health", (_, res) => res.json({ status: "ok" }));
-
 app.get("/sync-lp", async (req, res) => {
   syncLandingPageAnalytics();
   res.json({ success: true, message: "Landing page analytics sync started" });
 });
 
+app.get("/sync-vidalytics", async (req, res) => {
+  syncVidalytics();
+  res.json({ success: true, message: "Vidalytics sync started in background" });
+});
+
+app.get("/health", (_, res) => res.json({ status: "ok" }));
+
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
-// Delay startup syncs so Render health check passes first
 setTimeout(() => {
   syncInProgress();
   syncHubSpotProjects();
   syncOperationsTickets();
   syncWebinar();
-  syncWebinarForm(); 
+  syncWebinarForm();
   syncLandingPageAnalytics();
+  syncVidalytics();
 }, 10_000);
 
-setInterval(syncInProgress,       60 * 60 * 1000); // every hour
-setInterval(syncHubSpotProjects,  60 * 60 * 1000); // every hour
-setInterval(syncOperationsTickets,  60 * 60 * 1000); // every hour  ← ADD THIS
-setInterval(syncWebinar, 60 * 60 * 1000); // every hour
-setInterval(syncWebinarForm, 60 * 60 * 1000); // every hour
+setInterval(syncInProgress,           60 * 60 * 1000); // every hour
+setInterval(syncHubSpotProjects,      60 * 60 * 1000); // every hour
+setInterval(syncOperationsTickets,    60 * 60 * 1000); // every hour
+setInterval(syncWebinar,              60 * 60 * 1000); // every hour
+setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
-
-
+setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
