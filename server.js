@@ -15,6 +15,12 @@ const FILLOUT_API_KEY  = process.env.FILLOUT_API_KEY;
 const FILLOUT_FORM_ID  = process.env.FILLOUT_FORM_ID;
 const WEBINAR_FORM_ID  = process.env.WEBINAR_FORM_ID;
 const WEBINAR_FORM_HS_ID = process.env.WEBINAR_FORM_HS_ID;
+const LP_TAB     = "HS Page Visits";
+const LP_PAGE_ID = "403572489414";
+const LP_HEADERS = [
+  "Date", "Page Views", "New Visitors", "Entrances", "Exits",
+  "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
+];
 
 // ── PIPELINE / STAGE MAP (baked in from confirmed API response) ──────────────
 // Structure: stageId → { label, pipelineLabel }
@@ -731,6 +737,76 @@ async function syncWebinarForm() {
   }
 }
 
+async function syncLandingPageAnalytics() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, LP_TAB);
+
+    // Load existing dates to avoid duplicates
+    const existing = await readTab(sheets, LP_TAB);
+    const existingDates = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
+
+    // Ensure headers
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${LP_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [LP_HEADERS] },
+      });
+    }
+
+    // Fetch last 30 days
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+
+    const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
+    const url = `https://api.hubapi.com/analytics/v2/reports/landing-pages/summarize/daily?start=${fmt(start)}&end=${fmt(end)}&f=${LP_PAGE_ID}`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`HubSpot analytics error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    const newRows = [];
+
+    for (const [date, values] of Object.entries(data)) {
+      if (existingDates.has(date)) continue;
+      const d = values[0] || {};
+      newRows.push([
+        date,
+        d.rawViews || 0,
+        d.newVisitorRawViews || 0,
+        d.entrances || 0,
+        d.exits || 0,
+        d.pageBounceRate ? Math.round(d.pageBounceRate * 100) + "%" : "0%",
+        d.timePerPageview ? Math.round(d.timePerPageview) : 0,
+        d.submissions || 0,
+        d.contacts || 0,
+        d.customers || 0,
+      ]);
+    }
+
+    // Sort rows by date ascending
+    newRows.sort((a, b) => a[0].localeCompare(b[0]));
+
+    if (newRows.length) {
+      await appendRows(sheets, LP_TAB, newRows);
+      console.log(`[LP Analytics] Appended ${newRows.length} new days`);
+    } else {
+      console.log(`[LP Analytics] No new data`);
+    }
+
+  } catch (err) {
+    console.error("[LP Analytics error]", err.message);
+  }
+}
 // ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
 
 // ── HUBSPOT WEBHOOK (real-time stage changes) ─────────────────────────────────
@@ -937,6 +1013,11 @@ app.get("/sync-webinar-hs", async (req, res) => {
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
+app.get("/sync-lp", async (req, res) => {
+  syncLandingPageAnalytics();
+  res.json({ success: true, message: "Landing page analytics sync started" });
+});
+
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
 // Delay startup syncs so Render health check passes first
 setTimeout(() => {
@@ -945,6 +1026,7 @@ setTimeout(() => {
   syncOperationsTickets();
   syncWebinar();
   syncWebinarForm(); 
+  syncLandingPageAnalytics();
 }, 10_000);
 
 setInterval(syncInProgress,       60 * 60 * 1000); // every hour
@@ -952,6 +1034,7 @@ setInterval(syncHubSpotProjects,  60 * 60 * 1000); // every hour
 setInterval(syncOperationsTickets,  60 * 60 * 1000); // every hour  ← ADD THIS
 setInterval(syncWebinar, 60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm, 60 * 60 * 1000); // every hour
+setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 
 
 
