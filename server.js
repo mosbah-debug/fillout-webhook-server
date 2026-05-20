@@ -24,6 +24,17 @@ const LP_HEADERS = [
   "Date", "Page Views", "New Visitors", "Entrances", "Exits",
   "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
 ];
+const UTM_TAB = "Page views/UTM content";
+const UTM_FILTERS = [
+  "3.13_m_all_pretax",
+  "webinar_title",
+  "more_than_2m_to_retire",
+  "retiring_married",
+];
+const UTM_HEADERS = [
+  "Date", "UTM Content", "Sessions", "Page Views", "Pages/Session",
+  "Bounce Rate", "Avg Time on Page (s)", "New Visitors", "Contacts", "Customers",
+];
 
 // ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
@@ -1091,6 +1102,94 @@ async function syncVidalytics() {
     console.error("[Vidalytics sync error]", err.message);
   }
 }
+async function syncUTMContent() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, UTM_TAB);
+
+    const existing = await readTab(sheets, UTM_TAB);
+    const existingKeys = new Set(
+      existing.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
+    );
+
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${UTM_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [UTM_HEADERS] },
+      });
+    }
+
+    const LAUNCH_DATE = "2026-05-17";
+    const yesterday   = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+    const datesToFetch = [];
+    const cursor = new Date(LAUNCH_DATE);
+    const end    = new Date(yesterdayStr);
+    while (cursor <= end) {
+      datesToFetch.push(cursor.toISOString().split("T")[0]);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    const filterParams = UTM_FILTERS.map(f => `f=${encodeURIComponent(f)}`).join("&");
+    const newRows = [];
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+    for (const date of datesToFetch) {
+      const dateStr = date.replace(/-/g, "");
+      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total?start=${dateStr}&end=${dateStr}&${filterParams}`;
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+      });
+
+      if (!res.ok) {
+        console.error(`[UTM sync] Error for ${date}: ${res.status}`);
+        await sleep(2000);
+        continue;
+      }
+
+      const data = await res.json();
+
+      for (const b of data.breakdowns || []) {
+        const key = `${date}__${b.breakdown}`;
+        if (existingKeys.has(key)) continue;
+
+        newRows.push([
+          date,
+          b.breakdown,
+          b.visits || 0,
+          b.rawViews || 0,
+          b.pageviewsPerSession ? Math.round(b.pageviewsPerSession * 100) / 100 : 0,
+          b.bounceRate ? Math.round(b.bounceRate * 100) + "%" : "0%",
+          b.timePerSession ? Math.round(b.timePerSession) : 0,
+          b.visitors || 0,
+          b.contacts || 0,
+          b.customers || 0,
+        ]);
+        existingKeys.add(key);
+      }
+
+      await sleep(500);
+    }
+
+    newRows.sort((a, b) => a[0].localeCompare(b[0]));
+
+    if (newRows.length) {
+      await appendRows(sheets, UTM_TAB, newRows);
+      console.log(`[UTM sync] Appended ${newRows.length} rows`);
+    } else {
+      console.log(`[UTM sync] No new data`);
+    }
+
+  } catch (err) {
+    console.error("[UTM sync error]", err.message);
+  }
+}
 
 // ── HUBSPOT WEBHOOK ───────────────────────────────────────────────────────────
 app.post("/webhook/hubspot", async (req, res) => {
@@ -1300,6 +1399,11 @@ app.get("/sync-vidalytics", async (req, res) => {
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
+app.get("/sync-utm", async (req, res) => {
+  syncUTMContent();
+  res.json({ success: true, message: "UTM content sync started" });
+});
+
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
 setTimeout(() => {
   syncInProgress();
@@ -1308,6 +1412,7 @@ setTimeout(() => {
   syncWebinar();
   syncWebinarForm();
   syncLandingPageAnalytics();
+  syncUTMContent(); 
 }, 10_000);
 
 // Vidalytics delayed separately to avoid rate limit conflicts on startup
@@ -1322,5 +1427,6 @@ setInterval(syncWebinar,              60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
+setInterval(syncUTMContent, 60 * 60 * 1000); // every hour
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
