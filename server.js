@@ -795,46 +795,104 @@ async function syncLandingPageAnalytics() {
 }
 
 // ── VIDALYTICS SYNC ───────────────────────────────────────────────────────────
-const VIDALYTICS_TAB     = "Vidalytics";
+const VIDALYTICS_TAB      = "Vidalytics";
+const VIDALYTICS_TAGS_TAB = "Vidalytics Tags";
+
 const VIDALYTICS_HEADERS = [
-  "Date", "Plays", "Unique Plays", "Play Rate (%)", "Unmute Rate (%)", "Avg Watch Duration (s)",
+  "Date",
+  "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
+  "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
 ];
 
-/**
- * Calculate average watch duration in seconds from drop-off data.
- * The drop-off endpoint returns { "0": N, "5": N, "10": N, ... }
- * where each key is a second timestamp and value is viewers still watching.
- * We calculate: sum of (viewers who dropped between t and t+interval) * midpoint_time
- * divided by total plays = weighted average watch duration.
- */
-function calcAvgWatchDuration(dropOffData, totalPlays) {
-  if (!dropOffData || !totalPlays || totalPlays === 0) return 0;
+const VIDALYTICS_TAGS_HEADERS = [
+  "Date", "Tag",
+  "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
+  "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
+];
 
-  // Sort timestamps numerically
-  const seconds = Object.keys(dropOffData)
-    .map(Number)
-    .sort((a, b) => a - b);
+const BATCH1 = "plays,impressions,unique_viewers,play_rate,unmute_rate";
+const BATCH2 = "avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks";
 
-  if (seconds.length === 0) return 0;
+// Fetch timeline data for a given segment ("segment.all" or "segment.tags")
+// Returns: { "YYYY-MM-DD": { metricKey: value, ... } }          (segment.all)
+//      or: { "YYYY-MM-DD": { tagName: { metricKey: value } } }  (segment.tags)
+async function fetchVidalyticsTimeline(dateFrom, dateTo, segment, vidHeaders) {
+  const base = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+             + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=${segment}`
+             + `&dateFrom=${dateFrom}&dateTo=${dateTo}`;
 
-  let weightedSum = 0;
-
-  for (let i = 0; i < seconds.length; i++) {
-    const t       = seconds[i];
-    const tNext   = seconds[i + 1];
-    const viewers = dropOffData[String(t)] || 0;
-
-    if (tNext !== undefined) {
-      // viewers who dropped between t and tNext watched until ~t seconds
-      const dropped = viewers - (dropOffData[String(tNext)] || 0);
-      if (dropped > 0) weightedSum += dropped * t;
-    } else {
-      // last segment: remaining viewers watched to the end
-      weightedSum += viewers * t;
+  async function fetchBatch(metrics) {
+    const res = await fetch(`${base}&metrics=${metrics}`, { headers: vidHeaders });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Vidalytics timeline error ${res.status}: ${err}`);
     }
+    const json = await res.json();
+    const metricList = metrics.split(",");
+    const byDate = {};
+    const segments = json.content?.data || [];
+
+    for (const seg of segments) {
+      const tagName = seg.segment; // "United States", "facebook", "all", etc.
+      for (const entry of seg.data || []) {
+        const d = entry.date?.split(" ")[0];
+        if (!d) continue;
+        const vals = entry.data || [];
+        const metrics_obj = {};
+        metricList.forEach((m, i) => { metrics_obj[m] = vals[i] ?? 0; });
+
+        if (segment === "segment.all") {
+          if (!byDate[d]) byDate[d] = {};
+          Object.assign(byDate[d], metrics_obj);
+        } else {
+          // segment.tags: nest by tag name
+          if (!byDate[d]) byDate[d] = {};
+          if (!byDate[d][tagName]) byDate[d][tagName] = {};
+          Object.assign(byDate[d][tagName], metrics_obj);
+        }
+      }
+    }
+    return byDate;
   }
 
-  return Math.round(weightedSum / totalPlays);
+  const [b1, b2] = await Promise.all([fetchBatch(BATCH1), fetchBatch(BATCH2)]);
+
+  // Merge both batches
+  if (segment === "segment.all") {
+    const merged = {};
+    const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
+    for (const d of allDates) {
+      merged[d] = { ...(b1[d] || {}), ...(b2[d] || {}) };
+    }
+    return merged;
+  } else {
+    // segment.tags: merge at date → tag level
+    const merged = {};
+    const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
+    for (const d of allDates) {
+      merged[d] = {};
+      const allTags = new Set([...Object.keys(b1[d] || {}), ...Object.keys(b2[d] || {})]);
+      for (const tag of allTags) {
+        merged[d][tag] = { ...(b1[d]?.[tag] || {}), ...(b2[d]?.[tag] || {}) };
+      }
+    }
+    return merged;
+  }
+}
+
+function buildMetricRow(m, round2) {
+  return [
+    m.plays           ?? 0,
+    m.impressions     ?? 0,
+    m.unique_viewers  ?? 0,
+    round2(m.play_rate),
+    round2(m.unmute_rate),
+    round2(m.avg_watched),
+    m.conversions     ?? 0,
+    round2(m.conversion_rate),
+    round2(m.bounce_rate),
+    m.cta_clicks      ?? 0,
+  ];
 }
 
 async function syncVidalytics() {
@@ -846,11 +904,14 @@ async function syncVidalytics() {
 
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
-    await ensureTab(sheets, VIDALYTICS_TAB);
 
-    // Ensure headers
-    const existing = await readTab(sheets, VIDALYTICS_TAB);
-    if (!existing.length || existing[0][0] !== "Date") {
+    // ── Ensure both tabs exist ──
+    await ensureTab(sheets, VIDALYTICS_TAB);
+    await ensureTab(sheets, VIDALYTICS_TAGS_TAB);
+
+    // ── Ensure headers ──
+    const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
+    if (!existingOverall.length || existingOverall[0].join(",") !== VIDALYTICS_HEADERS.join(",")) {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range: `${VIDALYTICS_TAB}!A1`,
@@ -859,12 +920,26 @@ async function syncVidalytics() {
       });
     }
 
-    // Build set of dates already in the sheet
-    const existingDates = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
+    const existingTags = await readTab(sheets, VIDALYTICS_TAGS_TAB);
+    if (!existingTags.length || existingTags[0].join(",") !== VIDALYTICS_TAGS_HEADERS.join(",")) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${VIDALYTICS_TAGS_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [VIDALYTICS_TAGS_HEADERS] },
+      });
+    }
 
-    // Build list of dates from launch (May 17 2026) through yesterday
-    const LAUNCH_DATE = "2026-05-17";
-    const yesterday   = new Date();
+    // ── Build missing dates for overall tab ──
+    const existingOverallDates = new Set(existingOverall.slice(1).map(r => r[0]).filter(Boolean));
+
+    // ── Build missing date+tag combos for tags tab ──
+    const existingTagKeys = new Set(
+      existingTags.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
+    );
+
+    const LAUNCH_DATE  = "2026-05-17";
+    const yesterday    = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split("T")[0];
 
@@ -873,61 +948,79 @@ async function syncVidalytics() {
     const end    = new Date(yesterdayStr);
     while (cursor <= end) {
       const d = cursor.toISOString().split("T")[0];
-      if (!existingDates.has(d)) datesToFetch.push(d);
+      datesToFetch.push(d);
       cursor.setDate(cursor.getDate() + 1);
     }
 
     if (datesToFetch.length === 0) {
-      console.log("[Vidalytics sync] All dates up to date, nothing to fetch");
+      console.log("[Vidalytics sync] No dates in range");
       return;
     }
-
-    console.log(`[Vidalytics sync] Fetching ${datesToFetch.length} date(s): ${datesToFetch[0]} → ${datesToFetch[datesToFetch.length - 1]}`);
 
     const vidHeaders = {
       "X-API-Key": VIDALYTICS_API_KEY,
       "Accept": "application/json",
     };
 
-    const newRows = [];
-
-    for (const dateStr of datesToFetch) {
-      // 1) Fetch total stats for this date
-      const statsUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}?dateFrom=${dateStr}&dateTo=${dateStr}`;
-      const statsRes = await fetch(statsUrl, { headers: vidHeaders });
-      if (!statsRes.ok) {
-        console.warn(`[Vidalytics sync] Stats fetch failed for ${dateStr}: ${statsRes.status}`);
-        continue;
-      }
-      const statsData = await statsRes.json();
-      const stats = statsData.content || {};
-
-      const plays       = stats.plays       ?? 0;
-      const playsUnique = stats.playsUnique ?? 0;
-      const playRate    = stats.playRate    != null ? Math.round(stats.playRate * 100) / 100 : 0;
-      const unmuteRate  = stats.unmuteRate  != null ? Math.round(stats.unmuteRate * 100) / 100 : 0;
-
-      // 2) Fetch drop-off data to calculate avg watch duration
-      let avgWatchDuration = 0;
-      if (plays > 0) {
-        const dropUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}/drop-off?dateFrom=${dateStr}&dateTo=${dateStr}`;
-        const dropRes = await fetch(dropUrl, { headers: vidHeaders });
-        if (dropRes.ok) {
-          const dropData = await dropRes.json();
-          const watches = dropData.content?.all?.watches || {};
-          avgWatchDuration = calcAvgWatchDuration(watches, plays);
-        } else {
-          console.warn(`[Vidalytics sync] Drop-off fetch failed for ${dateStr}: ${dropRes.status}`);
-        }
-      }
-
-      newRows.push([dateStr, plays, playsUnique, playRate, unmuteRate, avgWatchDuration]);
-      console.log(`[Vidalytics sync] ${dateStr} → plays=${plays}, unique=${playsUnique}, playRate=${playRate}%, unmuteRate=${unmuteRate}%, avgWatch=${avgWatchDuration}s`);
+    // Chunk into monthly windows (API max = 1 month per request)
+    const chunks = [];
+    let chunkStart = 0;
+    while (chunkStart < datesToFetch.length) {
+      const from  = datesToFetch[chunkStart];
+      const limit = new Date(from);
+      limit.setMonth(limit.getMonth() + 1);
+      limit.setDate(limit.getDate() - 1);
+      const limitStr    = limit.toISOString().split("T")[0];
+      const chunkDates  = datesToFetch.slice(chunkStart).filter(d => d <= limitStr);
+      chunks.push({ from, to: chunkDates[chunkDates.length - 1], dates: chunkDates });
+      chunkStart += chunkDates.length;
     }
 
-    if (newRows.length) {
-      await appendRows(sheets, VIDALYTICS_TAB, newRows);
-      console.log(`[Vidalytics sync] Appended ${newRows.length} row(s)`);
+    const newOverallRows = [];
+    const newTagRows     = [];
+
+    for (const chunk of chunks) {
+      // Fetch overall and tags in parallel
+      const [overallByDate, tagsByDate] = await Promise.all([
+        fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.all",  vidHeaders),
+        fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.tags", vidHeaders),
+      ]);
+
+      const round2 = v => v != null ? Math.round(v * 100) / 100 : 0;
+
+      for (const dateStr of chunk.dates) {
+        // ── Overall row ──
+        if (!existingOverallDates.has(dateStr)) {
+          const m = overallByDate[dateStr] || {};
+          newOverallRows.push([dateStr, ...buildMetricRow(m, round2)]);
+        }
+
+        // ── Tags rows ──
+        const tagData = tagsByDate[dateStr] || {};
+        for (const [tag, m] of Object.entries(tagData)) {
+          // Skip "Non-Tagged" and "All" aggregates — they duplicate overall data
+          if (tag === "Non-Tagged" || tag === "All" || tag === "all") continue;
+          const key = `${dateStr}__${tag}`;
+          if (!existingTagKeys.has(key)) {
+            newTagRows.push([dateStr, tag, ...buildMetricRow(m, round2)]);
+            existingTagKeys.add(key); // prevent dupes within this run
+          }
+        }
+      }
+    }
+
+    if (newOverallRows.length) {
+      await appendRows(sheets, VIDALYTICS_TAB, newOverallRows);
+      console.log(`[Vidalytics sync] Overall: appended ${newOverallRows.length} row(s)`);
+    } else {
+      console.log(`[Vidalytics sync] Overall: nothing new`);
+    }
+
+    if (newTagRows.length) {
+      await appendRows(sheets, VIDALYTICS_TAGS_TAB, newTagRows);
+      console.log(`[Vidalytics sync] Tags: appended ${newTagRows.length} row(s)`);
+    } else {
+      console.log(`[Vidalytics sync] Tags: nothing new`);
     }
 
   } catch (err) {
