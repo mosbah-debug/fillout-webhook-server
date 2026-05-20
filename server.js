@@ -830,6 +830,8 @@ async function fetchVidalyticsTimeline(dateFrom, dateTo, segment, vidHeaders) {
       throw new Error(`Vidalytics timeline error ${res.status}: ${err}`);
     }
     const json = await res.json();
+    // DEBUG: log raw response structure to diagnose zero values
+    console.log(`[Vidalytics DEBUG] metrics=${metricsParam} raw=`, JSON.stringify(json).slice(0, 500));
 
     // The API returns: content.data = [ { segment, metric, data: [ { date, data: [value] } ] } ]
     // Each entry in content.data corresponds to ONE metric for ONE segment
