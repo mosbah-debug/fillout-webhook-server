@@ -126,7 +126,7 @@ async function ensureTab(sheets, tabName) {
       console.log(`Created tab: ${tabName}`);
     }
   } catch (err) {
-    if (err.message && err.message.includes('already exists')) return;
+    if (err.message && (err.message.includes('already exists') || err.message.includes('addSheet'))) return;
     console.error(`[ensureTab error] ${tabName}:`, err.message);
   }
 }
