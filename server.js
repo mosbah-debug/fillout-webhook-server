@@ -855,7 +855,10 @@ async function fetchVidalyticsTimeline(dateFrom, dateTo, segment, vidHeaders) {
     return byDate;
   }
 
-  const [b1, b2] = await Promise.all([fetchBatch(BATCH1), fetchBatch(BATCH2)]);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const b1 = await fetchBatch(BATCH1);
+  await sleep(3000);
+  const b2 = await fetchBatch(BATCH2);
 
   // Merge both batches
   if (segment === "segment.all") {
@@ -979,12 +982,14 @@ async function syncVidalytics() {
     const newOverallRows = [];
     const newTagRows     = [];
 
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+
     for (const chunk of chunks) {
-      // Fetch overall and tags in parallel
-      const [overallByDate, tagsByDate] = await Promise.all([
-        fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.all",  vidHeaders),
-        fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.tags", vidHeaders),
-      ]);
+      // Fetch sequentially with generous delays to avoid 429 rate limiting
+      const overallByDate = await fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.all",  vidHeaders);
+      await sleep(5000);
+      const tagsByDate    = await fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.tags", vidHeaders);
+      await sleep(5000);
 
       const round2 = v => v != null ? Math.round(v * 100) / 100 : 0;
 
@@ -1244,8 +1249,12 @@ setTimeout(() => {
   syncWebinar();
   syncWebinarForm();
   syncLandingPageAnalytics();
-  syncVidalytics();
 }, 10_000);
+
+// Vidalytics delayed separately to avoid rate limit conflicts on startup
+setTimeout(() => {
+  syncVidalytics();
+}, 60_000);
 
 setInterval(syncInProgress,           60 * 60 * 1000); // every hour
 setInterval(syncHubSpotProjects,      60 * 60 * 1000); // every hour
