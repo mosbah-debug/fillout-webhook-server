@@ -830,31 +830,29 @@ async function fetchVidalyticsTimeline(dateFrom, dateTo, segment, vidHeaders) {
       throw new Error(`Vidalytics timeline error ${res.status}: ${err}`);
     }
     const json = await res.json();
-    // DEBUG: log raw response structure to diagnose zero values
-    console.log(`[Vidalytics DEBUG] metrics=${metricsParam} raw=`, JSON.stringify(json).slice(0, 500));
 
-    // The API returns: content.data = [ { segment, metric, data: [ { date, data: [value] } ] } ]
-    // Each entry in content.data corresponds to ONE metric for ONE segment
+    // Actual API structure:
+    // content.data = [{ segment: "all", data: [{ date: "2026-05-18 00:00:00", data: [{ videoGuid, metrics: { plays, impressions, ... } }] }] }]
     const byDate = {};
-    const items = json.content?.data || [];
+    const items  = json.content?.data || [];
 
     for (const item of items) {
-      const tagName   = item.segment;  // "all", "facebook", etc.
-      const metricKey = item.metric;   // "plays", "impressions", etc.
-      if (!metricKey) continue;
-
+      const tagName = item.segment;
       for (const entry of item.data || []) {
         const d = entry.date?.split(" ")[0];
         if (!d) continue;
-        const value = Array.isArray(entry.data) ? (entry.data[0] ?? 0) : (entry.data ?? 0);
-
+        // Merge metrics from all videoGuid entries (usually just one)
+        const mergedMetrics = {};
+        for (const vidEntry of entry.data || []) {
+          Object.assign(mergedMetrics, vidEntry.metrics || {});
+        }
         if (segment === "segment.all") {
           if (!byDate[d]) byDate[d] = {};
-          byDate[d][metricKey] = value;
+          Object.assign(byDate[d], mergedMetrics);
         } else {
           if (!byDate[d]) byDate[d] = {};
           if (!byDate[d][tagName]) byDate[d][tagName] = {};
-          byDate[d][tagName][metricKey] = value;
+          Object.assign(byDate[d][tagName], mergedMetrics);
         }
       }
     }
