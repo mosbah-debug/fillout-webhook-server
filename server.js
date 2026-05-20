@@ -807,87 +807,8 @@ const VIDALYTICS_HEADERS = [
 const VIDALYTICS_TAGS_HEADERS = [
   "Date", "Tag",
   "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
-  "Avg % Watched", "Avg Watch Duration (s)", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
+  "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
 ];
-
-// Fetch timeline data for a given segment ("segment.all" or "segment.tags")
-// Fetches each metric individually to avoid positional array ordering issues.
-// Returns: { "YYYY-MM-DD": { metricKey: value } }               (segment.all)
-//      or: { "YYYY-MM-DD": { tagName: { metricKey: value } } }  (segment.tags)
-async function fetchVidalyticsTimeline(dateFrom, dateTo, segment, vidHeaders) {
-  const base = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
-             + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=${segment}`
-             + `&dateFrom=${dateFrom}&dateTo=${dateTo}`;
-
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-  // Fetch up to 5 metrics at once; parse by metric name from response
-  async function fetchBatch(metricsList) {
-    const metricsParam = metricsList.join(",");
-    const res = await fetch(`${base}&metrics=${metricsParam}`, { headers: vidHeaders });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Vidalytics timeline error ${res.status}: ${err}`);
-    }
-    const json = await res.json();
-
-    // Actual API structure:
-    // content.data = [{ segment: "all", data: [{ date: "2026-05-18 00:00:00", data: [{ videoGuid, metrics: { plays, impressions, ... } }] }] }]
-    const byDate = {};
-    const items  = json.content?.data || [];
-
-    for (const item of items) {
-      const tagName = item.segment;
-      for (const entry of item.data || []) {
-        const d = entry.date?.split(" ")[0];
-        if (!d) continue;
-        // Merge metrics from all videoGuid entries (usually just one)
-        const mergedMetrics = {};
-        for (const vidEntry of entry.data || []) {
-          Object.assign(mergedMetrics, vidEntry.metrics || {});
-        }
-        if (segment === "segment.all") {
-          if (!byDate[d]) byDate[d] = {};
-          Object.assign(byDate[d], mergedMetrics);
-        } else {
-          if (!byDate[d]) byDate[d] = {};
-          if (!byDate[d][tagName]) byDate[d][tagName] = {};
-          Object.assign(byDate[d][tagName], mergedMetrics);
-        }
-      }
-    }
-    return byDate;
-  }
-
-  // Two batches of 5 metrics each (non-Enterprise limit)
-  const BATCH1 = ["plays", "impressions", "unique_viewers", "play_rate", "unmute_rate"];
-  const BATCH2 = ["avg_watched", "conversions", "conversion_rate", "bounce_rate", "cta_clicks"];
-
-  const b1 = await fetchBatch(BATCH1);
-  await sleep(3000);
-  const b2 = await fetchBatch(BATCH2);
-
-  // Merge both batches
-  if (segment === "segment.all") {
-    const merged = {};
-    const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
-    for (const d of allDates) {
-      merged[d] = { ...(b1[d] || {}), ...(b2[d] || {}) };
-    }
-    return merged;
-  } else {
-    const merged = {};
-    const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
-    for (const d of allDates) {
-      merged[d] = {};
-      const allTags = new Set([...Object.keys(b1[d] || {}), ...Object.keys(b2[d] || {})]);
-      for (const tag of allTags) {
-        merged[d][tag] = { ...(b1[d]?.[tag] || {}), ...(b2[d]?.[tag] || {}) };
-      }
-    }
-    return merged;
-  }
-}
 
 // Calculate avg watch duration in seconds from drop-off data
 function calcAvgWatchDuration(dropOffData, totalPlays) {
@@ -909,20 +830,57 @@ function calcAvgWatchDuration(dropOffData, totalPlays) {
   return Math.round(weightedSum / totalPlays);
 }
 
-function buildMetricRow(m, avgWatchDuration, round2) {
-  return [
-    m.plays             ?? 0,
-    m.impressions       ?? 0,
-    m.unique_viewers    ?? 0,
-    round2(m.play_rate),
-    round2(m.unmute_rate),
-    round2(m.avg_watched),
-    avgWatchDuration,
-    m.conversions       ?? 0,
-    round2(m.conversion_rate),
-    round2(m.bounce_rate),
-    m.cta_clicks        ?? 0,
-  ];
+// Fetch tags breakdown via timeline endpoint
+// Returns: { "YYYY-MM-DD": { tagName: { plays, impressions, ... } } }
+async function fetchVidalyticsTags(dateFrom, dateTo, vidHeaders) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const base  = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+              + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.tags`
+              + `&dateFrom=${dateFrom}&dateTo=${dateTo}`;
+
+  const BATCH1 = "plays,impressions,unique_viewers,play_rate,unmute_rate";
+  const BATCH2 = "avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks";
+
+  async function fetchBatch(metrics) {
+    const res = await fetch(`${base}&metrics=${metrics}`, { headers: vidHeaders });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Vidalytics tags error ${res.status}: ${err}`);
+    }
+    const json = await res.json();
+    const byDate = {};
+    for (const item of json.content?.data || []) {
+      const tagName = item.segment;
+      for (const entry of item.data || []) {
+        const d = entry.date?.split(" ")[0];
+        if (!d) continue;
+        const mergedMetrics = {};
+        for (const vidEntry of entry.data || []) {
+          Object.assign(mergedMetrics, vidEntry.metrics || {});
+        }
+        if (!byDate[d]) byDate[d] = {};
+        if (!byDate[d][tagName]) byDate[d][tagName] = {};
+        Object.assign(byDate[d][tagName], mergedMetrics);
+      }
+    }
+    return byDate;
+  }
+
+  const b1 = await fetchBatch(BATCH1);
+  await sleep(3000);
+  const b2 = await fetchBatch(BATCH2);
+
+  // Merge both batches at date → tag level
+  const merged = {};
+  const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
+  for (const d of allDates) {
+    merged[d] = {};
+    const allTags = new Set([...Object.keys(b1[d] || {}), ...Object.keys(b2[d] || {})]);
+    for (const tag of allTags) {
+      merged[d][tag] = { ...(b1[d]?.[tag] || {}), ...(b2[d]?.[tag] || {}) };
+    }
+  }
+  return merged;
 }
 
 async function syncVidalytics() {
@@ -938,7 +896,7 @@ async function syncVidalytics() {
     await ensureTab(sheets, VIDALYTICS_TAB);
     await ensureTab(sheets, VIDALYTICS_TAGS_TAB);
 
-    // Ensure headers (rewrite if columns changed)
+    // ── Ensure headers ──
     const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
     if (!existingOverall.length || existingOverall[0].join(",") !== VIDALYTICS_HEADERS.join(",")) {
       await sheets.spreadsheets.values.clear({ spreadsheetId: SPREADSHEET_ID, range: `${VIDALYTICS_TAB}!A:Z` });
@@ -995,7 +953,84 @@ async function syncVidalytics() {
       "Accept": "application/json",
     };
 
-    // Chunk into monthly windows (API max = 1 month)
+    const sleep          = ms => new Promise(r => setTimeout(r, ms));
+    const newOverallRows = [];
+    const newTagRows     = [];
+    const round2         = v => v != null ? Math.round(v * 100) / 100 : 0;
+
+    // ── Overall tab: original working approach (single video stats + drop-off) ──
+    for (const dateStr of datesToFetch) {
+      if (existingOverallDates.has(dateStr)) continue;
+
+      // Fetch total stats
+      const statsUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}?dateFrom=${dateStr}&dateTo=${dateStr}`;
+      const statsRes = await fetch(statsUrl, { headers: vidHeaders });
+      if (!statsRes.ok) {
+        console.warn(`[Vidalytics] Stats fetch failed for ${dateStr}: ${statsRes.status}`);
+        await sleep(2000);
+        continue;
+      }
+      const statsData = await statsRes.json();
+      const s = statsData.content || {};
+
+      const plays       = s.plays       ?? 0;
+      const playsUnique = s.playsUnique ?? 0;
+      const playRate    = round2(s.playRate);
+      const unmuteRate  = round2(s.unmuteRate);
+
+      // Fetch drop-off for avg watch duration
+      let avgWatchDuration = 0;
+      if (plays > 0) {
+        await sleep(2000);
+        const dropUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}/drop-off?dateFrom=${dateStr}&dateTo=${dateStr}`;
+        const dropRes = await fetch(dropUrl, { headers: vidHeaders });
+        if (dropRes.ok) {
+          const dropData = await dropRes.json();
+          const watches  = dropData.content?.all?.watches || {};
+          avgWatchDuration = calcAvgWatchDuration(watches, plays);
+        }
+      }
+
+      // For impressions, avg_watched, conversions, conversion_rate, bounce_rate, cta_clicks
+      // we use the timeline endpoint for this single date
+      await sleep(2000);
+      let impressions = 0, avgWatched = 0, conversions = 0, convRate = 0, bounceRate = 0, ctaClicks = 0;
+      try {
+        const tlUrl = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+                    + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
+                    + `&dateFrom=${dateStr}&dateTo=${dateStr}`
+                    + `&metrics=impressions,avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks`;
+        const tlRes = await fetch(tlUrl, { headers: vidHeaders });
+        if (tlRes.ok) {
+          const tlData = await tlRes.json();
+          for (const item of tlData.content?.data || []) {
+            for (const entry of item.data || []) {
+              for (const vidEntry of entry.data || []) {
+                const m = vidEntry.metrics || {};
+                impressions = m.impressions     ?? impressions;
+                avgWatched  = m.avg_watched     ?? avgWatched;
+                conversions = m.conversions     ?? conversions;
+                convRate    = m.conversion_rate ?? convRate;
+                bounceRate  = m.bounce_rate     ?? bounceRate;
+                ctaClicks   = m.cta_clicks      ?? ctaClicks;
+              }
+            }
+          }
+        }
+      } catch(e) {
+        console.warn(`[Vidalytics] Timeline fetch failed for ${dateStr}: ${e.message}`);
+      }
+
+      newOverallRows.push([
+        dateStr, plays, impressions, playsUnique, playRate, unmuteRate,
+        round2(avgWatched), avgWatchDuration, conversions, round2(convRate), round2(bounceRate), ctaClicks,
+      ]);
+      console.log(`[Vidalytics] ${dateStr} plays=${plays} impressions=${impressions} avgWatched=${round2(avgWatched)}% avgDuration=${avgWatchDuration}s`);
+      await sleep(2000);
+    }
+
+    // ── Tags tab: timeline segment.tags approach ──
+    // Chunk into monthly windows
     const chunks = [];
     let chunkStart = 0;
     while (chunkStart < datesToFetch.length) {
@@ -1009,51 +1044,29 @@ async function syncVidalytics() {
       chunkStart += chunkDates.length;
     }
 
-    const sleep      = ms => new Promise(r => setTimeout(r, ms));
-    const newOverallRows = [];
-    const newTagRows     = [];
-
     for (const chunk of chunks) {
-      const overallByDate = await fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.all",  vidHeaders);
+      const tagsByDate = await fetchVidalyticsTags(chunk.from, chunk.to, vidHeaders);
       await sleep(5000);
-      const tagsByDate    = await fetchVidalyticsTimeline(chunk.from, chunk.to, "segment.tags", vidHeaders);
-      await sleep(5000);
-
-      const round2 = v => v != null ? Math.round(v * 100) / 100 : 0;
 
       for (const dateStr of chunk.dates) {
-        // ── Overall row ──
-        if (!existingOverallDates.has(dateStr)) {
-          const m = overallByDate[dateStr] || {};
-
-          // Fetch drop-off for avg watch duration in seconds
-          let avgWatchDuration = 0;
-          if ((m.plays ?? 0) > 0) {
-            try {
-              const dropUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}/drop-off?dateFrom=${dateStr}&dateTo=${dateStr}`;
-              const dropRes = await fetch(dropUrl, { headers: vidHeaders });
-              if (dropRes.ok) {
-                const dropData = await dropRes.json();
-                const watches  = dropData.content?.all?.watches || {};
-                avgWatchDuration = calcAvgWatchDuration(watches, m.plays);
-              }
-              await sleep(2000);
-            } catch (e) {
-              console.warn(`[Vidalytics] drop-off fetch failed for ${dateStr}: ${e.message}`);
-            }
-          }
-
-          newOverallRows.push([dateStr, ...buildMetricRow(m, avgWatchDuration, round2)]);
-          console.log(`[Vidalytics] ${dateStr} plays=${m.plays} impressions=${m.impressions} avgWatched=${round2(m.avg_watched)}% avgDuration=${avgWatchDuration}s conversions=${m.conversions}`);
-        }
-
-        // ── Tags rows ──
         const tagData = tagsByDate[dateStr] || {};
         for (const [tag, m] of Object.entries(tagData)) {
           if (tag === "Non-Tagged" || tag === "All" || tag === "all") continue;
           const key = `${dateStr}__${tag}`;
           if (!existingTagKeys.has(key)) {
-            newTagRows.push([dateStr, tag, ...buildMetricRow(m, 0, round2)]);
+            newTagRows.push([
+              dateStr, tag,
+              m.plays            ?? 0,
+              m.impressions      ?? 0,
+              m.unique_viewers   ?? 0,
+              round2(m.play_rate),
+              round2(m.unmute_rate),
+              round2(m.avg_watched),
+              m.conversions      ?? 0,
+              round2(m.conversion_rate),
+              round2(m.bounce_rate),
+              m.cta_clicks       ?? 0,
+            ]);
             existingTagKeys.add(key);
           }
         }
