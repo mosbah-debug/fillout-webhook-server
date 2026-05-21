@@ -804,6 +804,8 @@ async function syncLandingPageAnalytics() {
   }
 }
 
+const LT_PAGE_ID = "405603080417";
+
 async function syncLiveTrainingPage() {
   try {
     const auth   = getGoogleAuth();
@@ -831,27 +833,38 @@ async function syncLiveTrainingPage() {
 
     const newUTMRows = [];
 
-    for (const utmValue of LT_UTM_FILTERS) {
-      const utmUrl = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
-      const utmRes = await fetch(utmUrl, {
-        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
-      });
-      if (!utmRes.ok) {
-        console.warn(`[LT UTM] Failed for "${utmValue}": ${utmRes.status}`);
-        continue;
-      }
-      const utmData = await utmRes.json();
+    // Fetch daily page stats for the livetraining page broken down by utm_content.
+    // The website-pages endpoint supports breakdown=utm-content which returns per-UTM
+    // rows inside each day's array, filtered to a single page via &f=<PAGE_ID>.
+    const url = `https://api.hubapi.com/analytics/v2/reports/website-pages/summarize/daily`
+              + `?start=${fmt(start)}&end=${fmt(end)}&f=${LT_PAGE_ID}&breakdown=utm-content`;
 
-      for (const [date, values] of Object.entries(utmData)) {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HubSpot LT analytics error ${res.status}: ${errText}`);
+    }
+
+    const data = await res.json();
+
+    // Response shape: { "YYYYMMDD": [ { breakdownValue, rawViews, newVisitorRawViews, entrances, ... }, ... ] }
+    for (const [date, rows] of Object.entries(data)) {
+      if (!Array.isArray(rows)) continue;
+      for (const row of rows) {
+        const utmValue = row.breakdownValue || row.utmContent || row.utm_content || "";
+        // Only keep the UTM values we care about
+        if (!LT_UTM_FILTERS.includes(utmValue)) continue;
         const key = `${date}__${utmValue}`;
         if (existingUTMKeys.has(key)) continue;
-        const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
         newUTMRows.push([
           date,
           utmValue,
-          d.rawViews || d.pageviews || d.sessions || 0,
-          d.newVisitorRawViews || d.newVisitors || 0,
-          d.entrances || 0,
+          row.rawViews            || 0,
+          row.newVisitorRawViews  || 0,
+          row.entrances           || 0,
         ]);
         existingUTMKeys.add(key);
       }
@@ -1465,6 +1478,19 @@ app.get("/sync-lp", async (req, res) => {
 });
 
 app.get("/sync-lt", async (req, res) => {
+  if (req.query.clear === "true") {
+    try {
+      const auth   = getGoogleAuth();
+      const sheets = google.sheets({ version: "v4", auth });
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${LT_UTM_TAB}!A:Z`,
+      });
+      console.log(`[sync-lt] Cleared "${LT_UTM_TAB}" tab before re-sync`);
+    } catch (e) {
+      console.error("[sync-lt clear error]", e.message);
+    }
+  }
   syncLiveTrainingPage();
   res.json({ success: true, message: "Live training page analytics sync started" });
 });
