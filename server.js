@@ -136,7 +136,10 @@ async function ensureTab(sheets, tabName) {
       console.log(`Created tab: ${tabName}`);
     }
   } catch (err) {
-    console.error(`[ensureTab error] ${tabName}:`, err.message);
+    // Suppress harmless "already exists" race condition errors
+    if (!err.message?.includes('already exists')) {
+      console.error(`[ensureTab error] ${tabName}:`, err.message);
+    }
   }
 }
 
@@ -836,7 +839,9 @@ async function syncLiveTrainingPage() {
     // Fetch daily page stats for the livetraining page broken down by utm_content.
     // The website-pages endpoint supports breakdown=utm-content which returns per-UTM
     // rows inside each day's array, filtered to a single page via &f=<PAGE_ID>.
-    const url = `https://api.hubapi.com/analytics/v2/reports/website-pages/summarize/daily`
+    // Uses the same landing-pages endpoint as LP sync (proven working).
+    // breakdown=utm-content splits results per UTM value per day.
+    const url = `https://api.hubapi.com/analytics/v2/reports/landing-pages/summarize/daily`
               + `?start=${fmt(start)}&end=${fmt(end)}&f=${LT_PAGE_ID}&breakdown=utm-content`;
 
     const res = await fetch(url, {
