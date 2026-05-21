@@ -25,6 +25,16 @@ const LP_HEADERS = [
   "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
 ];
 
+const LT_UTM_TAB      = "LT UTM Content";
+const LT_UTM_HEADERS  = ["Date", "UTM Content", "Page Views", "New Visitors", "Entrances"];
+// Known webinar UTM content values to track
+const LT_UTM_FILTERS  = [
+  "3.13_m_all_pretax",
+  "webinar_title",
+  "more_than_2m_to_retire",
+  "retiring_married",
+];
+
 // ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
 
@@ -794,6 +804,73 @@ async function syncLandingPageAnalytics() {
   }
 }
 
+async function syncLiveTrainingPage() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, LT_UTM_TAB);
+
+    const existingUTM = await readTab(sheets, LT_UTM_TAB);
+    const existingUTMKeys = new Set(
+      existingUTM.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
+    );
+
+    if (!existingUTM.length || existingUTM[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${LT_UTM_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [LT_UTM_HEADERS] },
+      });
+    }
+
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
+
+    const newUTMRows = [];
+
+    for (const utmValue of LT_UTM_FILTERS) {
+      const utmUrl = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
+      const utmRes = await fetch(utmUrl, {
+        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+      });
+      if (!utmRes.ok) {
+        console.warn(`[LT UTM] Failed for "${utmValue}": ${utmRes.status}`);
+        continue;
+      }
+      const utmData = await utmRes.json();
+
+      for (const [date, values] of Object.entries(utmData)) {
+        const key = `${date}__${utmValue}`;
+        if (existingUTMKeys.has(key)) continue;
+        const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
+        newUTMRows.push([
+          date,
+          utmValue,
+          d.rawViews || d.pageviews || d.sessions || 0,
+          d.newVisitorRawViews || d.newVisitors || 0,
+          d.entrances || 0,
+        ]);
+        existingUTMKeys.add(key);
+      }
+    }
+
+    newUTMRows.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+
+    if (newUTMRows.length) {
+      await appendRows(sheets, LT_UTM_TAB, newUTMRows);
+      console.log(`[LT UTM] Appended ${newUTMRows.length} new rows`);
+    } else {
+      console.log(`[LT UTM] No new UTM data`);
+    }
+
+  } catch (err) {
+    console.error("[LT Analytics error]", err.message);
+  }
+}
+
 // ── VIDALYTICS SYNC ───────────────────────────────────────────────────────────
 const VIDALYTICS_TAB         = "Vidalytics";
 const VIDALYTICS_TAGS_TAB    = "Vidalytics Tags";
@@ -1387,6 +1464,11 @@ app.get("/sync-lp", async (req, res) => {
   res.json({ success: true, message: "Landing page analytics sync started" });
 });
 
+app.get("/sync-lt", async (req, res) => {
+  syncLiveTrainingPage();
+  res.json({ success: true, message: "Live training page analytics sync started" });
+});
+
 app.get("/sync-vidalytics", async (req, res) => {
   syncVidalytics();
   res.json({ success: true, message: "Vidalytics sync started in background" });
@@ -1402,6 +1484,7 @@ setTimeout(() => {
   syncWebinar();
   syncWebinarForm();
   syncLandingPageAnalytics();
+  syncLiveTrainingPage();
 }, 10_000);
 
 // Vidalytics delayed separately to avoid rate limit conflicts on startup
@@ -1415,6 +1498,7 @@ setInterval(syncOperationsTickets,    60 * 60 * 1000); // every hour
 setInterval(syncWebinar,              60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
+setInterval(syncLiveTrainingPage,     60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
