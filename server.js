@@ -813,9 +813,7 @@ const VIDALYTICS_TAGS_HEADERS = [
 ];
 
 const VIDALYTICS_CONTENT_HEADERS = [
-  "Date", "UTM Content",
-  "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
-  "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
+  "Date", "UTM Content", "Plays",
 ];
 
 // Calculate avg watch duration in seconds from drop-off data
@@ -851,50 +849,33 @@ async function readVidalyticsConfig(sheets) {
 // Fetch timeline data filtered by url_param for a single utm_content value
 // Returns: { "YYYY-MM-DD": { plays, impressions, ... } }
 async function fetchVidalyticsContentTimeline(dateFrom, dateTo, utmContent, vidHeaders) {
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const base  = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
-              + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
-              + `&dateFrom=${dateFrom}&dateTo=${dateTo}`
-              + `&filter.url_params.utm_content=${encodeURIComponent(utmContent)}`;
+  const url = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+            + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
+            + `&dateFrom=${dateFrom}&dateTo=${dateTo}`
+            + `&metrics=plays`
+            + `&filter.url_params.utm_content=${encodeURIComponent(utmContent)}`;
 
-  const BATCH1 = "plays,impressions,unique_viewers,play_rate,unmute_rate";
-  const BATCH2 = "avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks";
-
-  async function fetchBatch(metrics) {
-    const res = await fetch(`${base}&metrics=${metrics}`, { headers: vidHeaders });
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Vidalytics content timeline error ${res.status}: ${err}`);
-    }
-    const json = await res.json();
-    const byDate = {};
-    for (const item of json.content?.data || []) {
-      for (const entry of item.data || []) {
-        const d = entry.date?.split(" ")[0];
-        if (!d) continue;
-        if (!byDate[d]) byDate[d] = {};
-        for (const vidEntry of entry.data || []) {
-          Object.assign(byDate[d], vidEntry.metrics || {});
-        }
+  const res = await fetch(url, { headers: vidHeaders });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Vidalytics content timeline error ${res.status}: ${err}`);
+  }
+  const json = await res.json();
+  const byDate = {};
+  for (const item of json.content?.data || []) {
+    for (const entry of item.data || []) {
+      const d = entry.date?.split(" ")[0];
+      if (!d) continue;
+      if (!byDate[d]) byDate[d] = {};
+      for (const vidEntry of entry.data || []) {
+        Object.assign(byDate[d], vidEntry.metrics || {});
       }
     }
-    return byDate;
   }
-
-  const b1 = await fetchBatch(BATCH1);
-  await sleep(3000);
-  const b2 = await fetchBatch(BATCH2);
-
-  // Merge both batches
-  const merged = {};
-  const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
-  for (const d of allDates) {
-    merged[d] = { ...(b1[d] || {}), ...(b2[d] || {}) };
-  }
-  return merged;
+  return byDate;
 }
 
-// Fetch tags breakdown via timeline endpoint
+
 async function fetchVidalyticsTags(dateFrom, dateTo, vidHeaders) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const base  = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
@@ -1166,17 +1147,7 @@ async function syncVidalytics() {
 
             const m = byDate[dateStr] || {};
             newContentRows.push([
-              dateStr, utmContent,
-              m.plays            ?? 0,
-              m.impressions      ?? 0,
-              m.unique_viewers   ?? 0,
-              round2(m.play_rate),
-              round2(m.unmute_rate),
-              round2(m.avg_watched),
-              m.conversions      ?? 0,
-              round2(m.conversion_rate),
-              round2(m.bounce_rate),
-              m.cta_clicks       ?? 0,
+              dateStr, utmContent, m.plays ?? 0,
             ]);
             existingContentKeys.add(key);
           }
