@@ -24,17 +24,6 @@ const LP_HEADERS = [
   "Date", "Page Views", "New Visitors", "Entrances", "Exits",
   "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
 ];
-const UTM_TAB = "Page views/UTM content";
-const UTM_FILTERS = [
-  "3.13_m_all_pretax",
-  "webinar_title",
-  "more_than_2m_to_retire",
-  "retiring_married",
-];
-const UTM_HEADERS = [
-  "Date", "UTM Content", "Sessions", "Page Views", "Pages/Session",
-  "Bounce Rate", "Avg Time on Page (s)", "New Visitors", "Contacts", "Customers",
-];
 
 // ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
@@ -806,8 +795,10 @@ async function syncLandingPageAnalytics() {
 }
 
 // ── VIDALYTICS SYNC ───────────────────────────────────────────────────────────
-const VIDALYTICS_TAB      = "Vidalytics";
-const VIDALYTICS_TAGS_TAB = "Vidalytics Tags";
+const VIDALYTICS_TAB         = "Vidalytics";
+const VIDALYTICS_TAGS_TAB    = "Vidalytics Tags";
+const VIDALYTICS_CONTENT_TAB = "Vidalytics Content";
+const VIDALYTICS_CONFIG_TAB  = "Vidalytics Config";
 
 const VIDALYTICS_HEADERS = [
   "Date",
@@ -817,6 +808,12 @@ const VIDALYTICS_HEADERS = [
 
 const VIDALYTICS_TAGS_HEADERS = [
   "Date", "Tag",
+  "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
+  "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
+];
+
+const VIDALYTICS_CONTENT_HEADERS = [
+  "Date", "UTM Content",
   "Plays", "Impressions", "Unique Viewers", "Play Rate (%)", "Unmute Rate (%)",
   "Avg % Watched", "Conversions", "Conversion Rate (%)", "Bounce Rate (%)", "CTA Clicks",
 ];
@@ -841,8 +838,63 @@ function calcAvgWatchDuration(dropOffData, totalPlays) {
   return Math.round(weightedSum / totalPlays);
 }
 
+// Read active utm_content values from "Vidalytics Config" tab
+async function readVidalyticsConfig(sheets) {
+  const rows = await readTab(sheets, VIDALYTICS_CONFIG_TAB);
+  if (rows.length < 2) return [];
+  // Skip header row, return active entries
+  return rows.slice(1)
+    .filter(r => r[0] && r[1]?.toLowerCase() === "yes")
+    .map(r => r[0].trim());
+}
+
+// Fetch timeline data filtered by url_param for a single utm_content value
+// Returns: { "YYYY-MM-DD": { plays, impressions, ... } }
+async function fetchVidalyticsContentTimeline(dateFrom, dateTo, utmContent, vidHeaders) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const base  = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+              + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
+              + `&dateFrom=${dateFrom}&dateTo=${dateTo}`
+              + `&filter.url_params.utm_content=${encodeURIComponent(utmContent)}`;
+
+  const BATCH1 = "plays,impressions,unique_viewers,play_rate,unmute_rate";
+  const BATCH2 = "avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks";
+
+  async function fetchBatch(metrics) {
+    const res = await fetch(`${base}&metrics=${metrics}`, { headers: vidHeaders });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Vidalytics content timeline error ${res.status}: ${err}`);
+    }
+    const json = await res.json();
+    const byDate = {};
+    for (const item of json.content?.data || []) {
+      for (const entry of item.data || []) {
+        const d = entry.date?.split(" ")[0];
+        if (!d) continue;
+        if (!byDate[d]) byDate[d] = {};
+        for (const vidEntry of entry.data || []) {
+          Object.assign(byDate[d], vidEntry.metrics || {});
+        }
+      }
+    }
+    return byDate;
+  }
+
+  const b1 = await fetchBatch(BATCH1);
+  await sleep(3000);
+  const b2 = await fetchBatch(BATCH2);
+
+  // Merge both batches
+  const merged = {};
+  const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
+  for (const d of allDates) {
+    merged[d] = { ...(b1[d] || {}), ...(b2[d] || {}) };
+  }
+  return merged;
+}
+
 // Fetch tags breakdown via timeline endpoint
-// Returns: { "YYYY-MM-DD": { tagName: { plays, impressions, ... } } }
 async function fetchVidalyticsTags(dateFrom, dateTo, vidHeaders) {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const base  = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
@@ -881,7 +933,6 @@ async function fetchVidalyticsTags(dateFrom, dateTo, vidHeaders) {
   await sleep(3000);
   const b2 = await fetchBatch(BATCH2);
 
-  // Merge both batches at date → tag level
   const merged = {};
   const allDates = new Set([...Object.keys(b1), ...Object.keys(b2)]);
   for (const d of allDates) {
@@ -906,6 +957,7 @@ async function syncVidalytics() {
 
     await ensureTab(sheets, VIDALYTICS_TAB);
     await ensureTab(sheets, VIDALYTICS_TAGS_TAB);
+    await ensureTab(sheets, VIDALYTICS_CONTENT_TAB);
 
     // ── Ensure headers ──
     const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
@@ -930,16 +982,35 @@ async function syncVidalytics() {
       });
     }
 
+    const existingContent = await readTab(sheets, VIDALYTICS_CONTENT_TAB);
+    if (!existingContent.length || existingContent[0].join(",") !== VIDALYTICS_CONTENT_HEADERS.join(",")) {
+      await sheets.spreadsheets.values.clear({ spreadsheetId: SPREADSHEET_ID, range: `${VIDALYTICS_CONTENT_TAB}!A:Z` });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${VIDALYTICS_CONTENT_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [VIDALYTICS_CONTENT_HEADERS] },
+      });
+    }
+
     // Re-read after potential header rewrite
-    const overallRows = await readTab(sheets, VIDALYTICS_TAB);
-    const tagsRows    = await readTab(sheets, VIDALYTICS_TAGS_TAB);
+    const overallRows  = await readTab(sheets, VIDALYTICS_TAB);
+    const tagsRows     = await readTab(sheets, VIDALYTICS_TAGS_TAB);
+    const contentRows  = await readTab(sheets, VIDALYTICS_CONTENT_TAB);
 
     const existingOverallDates = new Set(overallRows.slice(1).map(r => r[0]).filter(Boolean));
     const existingTagKeys      = new Set(
       tagsRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
     );
+    const existingContentKeys  = new Set(
+      contentRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
+    );
 
-    // Build missing dates from launch through yesterday
+    // Read active utm_content values from config tab
+    const activeContents = await readVidalyticsConfig(sheets);
+    console.log(`[Vidalytics sync] Active UTM contents: ${activeContents.join(", ") || "none"}`);
+
+    // Build date range from launch through yesterday
     const LAUNCH_DATE  = "2026-05-17";
     const yesterday    = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
@@ -967,13 +1038,13 @@ async function syncVidalytics() {
     const sleep          = ms => new Promise(r => setTimeout(r, ms));
     const newOverallRows = [];
     const newTagRows     = [];
+    const newContentRows = [];
     const round2         = v => v != null ? Math.round(v * 100) / 100 : 0;
 
-    // ── Overall tab: original working approach (single video stats + drop-off) ──
+    // ── Overall tab: original working approach ──
     for (const dateStr of datesToFetch) {
       if (existingOverallDates.has(dateStr)) continue;
 
-      // Fetch total stats
       const statsUrl = `https://api.vidalytics.com/public/v1/stats/video/${VIDALYTICS_VIDEO_ID}?dateFrom=${dateStr}&dateTo=${dateStr}`;
       const statsRes = await fetch(statsUrl, { headers: vidHeaders });
       if (!statsRes.ok) {
@@ -989,7 +1060,6 @@ async function syncVidalytics() {
       const playRate    = round2(s.playRate);
       const unmuteRate  = round2(s.unmuteRate);
 
-      // Fetch drop-off for avg watch duration
       let avgWatchDuration = 0;
       if (plays > 0) {
         await sleep(2000);
@@ -1002,8 +1072,6 @@ async function syncVidalytics() {
         }
       }
 
-      // For impressions, avg_watched, conversions, conversion_rate, bounce_rate, cta_clicks
-      // we use the timeline endpoint for this single date
       await sleep(2000);
       let impressions = 0, avgWatched = 0, conversions = 0, convRate = 0, bounceRate = 0, ctaClicks = 0;
       try {
@@ -1040,8 +1108,7 @@ async function syncVidalytics() {
       await sleep(2000);
     }
 
-    // ── Tags tab: timeline segment.tags approach ──
-    // Chunk into monthly windows
+    // ── Tags tab ──
     const chunks = [];
     let chunkStart = 0;
     while (chunkStart < datesToFetch.length) {
@@ -1084,6 +1151,44 @@ async function syncVidalytics() {
       }
     }
 
+    // ── Content tab: filter by utm_content per active entry ──
+    if (activeContents.length > 0) {
+      for (const utmContent of activeContents) {
+        console.log(`[Vidalytics] Fetching content filter: ${utmContent}`);
+
+        for (const chunk of chunks) {
+          const byDate = await fetchVidalyticsContentTimeline(chunk.from, chunk.to, utmContent, vidHeaders);
+          await sleep(5000);
+
+          for (const dateStr of chunk.dates) {
+            const key = `${dateStr}__${utmContent}`;
+            if (existingContentKeys.has(key)) continue;
+
+            const m = byDate[dateStr] || {};
+            newContentRows.push([
+              dateStr, utmContent,
+              m.plays            ?? 0,
+              m.impressions      ?? 0,
+              m.unique_viewers   ?? 0,
+              round2(m.play_rate),
+              round2(m.unmute_rate),
+              round2(m.avg_watched),
+              m.conversions      ?? 0,
+              round2(m.conversion_rate),
+              round2(m.bounce_rate),
+              m.cta_clicks       ?? 0,
+            ]);
+            existingContentKeys.add(key);
+          }
+        }
+
+        await sleep(3000);
+      }
+    } else {
+      console.log("[Vidalytics sync] No active UTM contents in config tab — skipping content sync");
+    }
+
+    // ── Write all new rows ──
     if (newOverallRows.length) {
       await appendRows(sheets, VIDALYTICS_TAB, newOverallRows);
       console.log(`[Vidalytics sync] Overall: appended ${newOverallRows.length} row(s)`);
@@ -1098,96 +1203,15 @@ async function syncVidalytics() {
       console.log(`[Vidalytics sync] Tags: nothing new`);
     }
 
+    if (newContentRows.length) {
+      await appendRows(sheets, VIDALYTICS_CONTENT_TAB, newContentRows);
+      console.log(`[Vidalytics sync] Content: appended ${newContentRows.length} row(s)`);
+    } else {
+      console.log(`[Vidalytics sync] Content: nothing new`);
+    }
+
   } catch (err) {
     console.error("[Vidalytics sync error]", err.message);
-  }
-}
-async function syncUTMContent() {
-  try {
-    const auth   = getGoogleAuth();
-    const sheets = google.sheets({ version: "v4", auth });
-    await ensureTab(sheets, UTM_TAB);
-
-    const existing = await readTab(sheets, UTM_TAB);
-    const existingKeys = new Set(
-      existing.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
-    );
-
-    if (!existing.length || existing[0][0] !== "Date") {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${UTM_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [UTM_HEADERS] },
-      });
-    }
-
-    const LAUNCH_DATE = "2026-05-17";
-    const yesterday   = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-    const datesToFetch = [];
-    const cursor = new Date(LAUNCH_DATE);
-    const end    = new Date(yesterdayStr);
-    while (cursor <= end) {
-      datesToFetch.push(cursor.toISOString().split("T")[0]);
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
-    const filterParams = UTM_FILTERS.map(f => `f=${encodeURIComponent(f)}`).join("&");
-    const newRows = [];
-    const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-    for (const date of datesToFetch) {
-      const dateStr = date.replace(/-/g, "");
-      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total?start=${dateStr}&end=${dateStr}&${filterParams}`;
-
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
-      });
-
-      if (!res.ok) {
-        console.error(`[UTM sync] Error for ${date}: ${res.status}`);
-        await sleep(2000);
-        continue;
-      }
-
-      const data = await res.json();
-
-      for (const b of data.breakdowns || []) {
-        const key = `${date}__${b.breakdown}`;
-        if (existingKeys.has(key)) continue;
-
-        newRows.push([
-          date,
-          b.breakdown,
-          b.visits || 0,
-          b.rawViews || 0,
-          b.pageviewsPerSession ? Math.round(b.pageviewsPerSession * 100) / 100 : 0,
-          b.bounceRate ? Math.round(b.bounceRate * 100) + "%" : "0%",
-          b.timePerSession ? Math.round(b.timePerSession) : 0,
-          b.visitors || 0,
-          b.contacts || 0,
-          b.customers || 0,
-        ]);
-        existingKeys.add(key);
-      }
-
-      await sleep(500);
-    }
-
-    newRows.sort((a, b) => a[0].localeCompare(b[0]));
-
-    if (newRows.length) {
-      await appendRows(sheets, UTM_TAB, newRows);
-      console.log(`[UTM sync] Appended ${newRows.length} rows`);
-    } else {
-      console.log(`[UTM sync] No new data`);
-    }
-
-  } catch (err) {
-    console.error("[UTM sync error]", err.message);
   }
 }
 
@@ -1399,11 +1423,6 @@ app.get("/sync-vidalytics", async (req, res) => {
 
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
-app.get("/sync-utm", async (req, res) => {
-  syncUTMContent();
-  res.json({ success: true, message: "UTM content sync started" });
-});
-
 // ── SCHEDULES ─────────────────────────────────────────────────────────────────
 setTimeout(() => {
   syncInProgress();
@@ -1412,7 +1431,6 @@ setTimeout(() => {
   syncWebinar();
   syncWebinarForm();
   syncLandingPageAnalytics();
-  syncUTMContent(); 
 }, 10_000);
 
 // Vidalytics delayed separately to avoid rate limit conflicts on startup
@@ -1427,6 +1445,5 @@ setInterval(syncWebinar,              60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
-setInterval(syncUTMContent, 60 * 60 * 1000); // every hour
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
