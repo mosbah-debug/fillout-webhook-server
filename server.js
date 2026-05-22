@@ -749,9 +749,8 @@ async function syncLandingPageAnalytics() {
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, LP_TAB);
 
+    // Read all existing rows so we can upsert (update zeros, append new dates)
     const existing = await readTab(sheets, LP_TAB);
-    const existingDates = new Set(existing.slice(1).map(r => r[0]).filter(Boolean));
-
     if (!existing.length || existing[0][0] !== "Date") {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
@@ -759,6 +758,12 @@ async function syncLandingPageAnalytics() {
         valueInputOption: "RAW",
         requestBody: { values: [LP_HEADERS] },
       });
+    }
+
+    // Build a map of date -> row index (1-based, excluding header)
+    const dateToRowIndex = {};
+    for (let i = 1; i < existing.length; i++) {
+      if (existing[i][0]) dateToRowIndex[existing[i][0]] = i + 1; // +1 for 1-based sheet row
     }
 
     const end   = new Date();
@@ -777,12 +782,12 @@ async function syncLandingPageAnalytics() {
     }
 
     const data = await res.json();
-    const newRows = [];
+    const toAppend  = [];
+    let   updated   = 0;
 
     for (const [date, values] of Object.entries(data)) {
-      if (existingDates.has(date)) continue;
       const d = values[0] || {};
-      newRows.push([
+      const newRow = [
         date,
         d.rawViews || 0,
         d.newVisitorRawViews || 0,
@@ -793,17 +798,30 @@ async function syncLandingPageAnalytics() {
         d.submissions || 0,
         d.contacts || 0,
         d.customers || 0,
-      ]);
+      ];
+
+      if (dateToRowIndex[date] !== undefined) {
+        // Date already exists — overwrite it so zero rows get corrected
+        const rowNum = dateToRowIndex[date];
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${LP_TAB}!A${rowNum}`,
+          valueInputOption: "RAW",
+          requestBody: { values: [newRow] },
+        });
+        updated++;
+      } else {
+        // Brand new date — queue for append
+        toAppend.push(newRow);
+      }
     }
 
-    newRows.sort((a, b) => a[0].localeCompare(b[0]));
-
-    if (newRows.length) {
-      await appendRows(sheets, LP_TAB, newRows);
-      console.log(`[LP Analytics] Appended ${newRows.length} new days`);
-    } else {
-      console.log(`[LP Analytics] No new data`);
+    toAppend.sort((a, b) => a[0].localeCompare(b[0]));
+    if (toAppend.length) {
+      await appendRows(sheets, LP_TAB, toAppend);
     }
+
+    console.log(`[LP Analytics] Updated ${updated} existing rows, appended ${toAppend.length} new days`);
 
   } catch (err) {
     console.error("[LP Analytics error]", err.message);
