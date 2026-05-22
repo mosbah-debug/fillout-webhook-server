@@ -1153,29 +1153,35 @@ async function syncVidalytics() {
       await sleep(2000);
       let impressions = 0, avgWatched = 0, conversions = 0, convRate = 0, bounceRate = 0, ctaClicks = 0;
       try {
-        const tlUrl = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
-                    + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
-                    + `&dateFrom=${dateStr}&dateTo=${dateStr}`
-                    + `&metrics=impressions,avg_watched,conversions,conversion_rate,bounce_rate,cta_clicks`;
-        const tlRes = await fetch(tlUrl, { headers: vidHeaders });
-        if (tlRes.ok) {
-          const tlData = await tlRes.json();
-          for (const item of tlData.content?.data || []) {
-            for (const entry of item.data || []) {
-              for (const vidEntry of entry.data || []) {
-                const m = vidEntry.metrics || {};
-                impressions = m.impressions     ?? impressions;
-                avgWatched  = m.avg_watched     ?? avgWatched;
-                conversions = m.conversions     ?? conversions;
-                convRate    = m.conversion_rate ?? convRate;
-                bounceRate  = m.bounce_rate     ?? bounceRate;
-                ctaClicks   = m.cta_clicks      ?? ctaClicks;
+        // Fetch one metric at a time — non-Enterprise only allows 1 metric per request
+        const extraMetrics = [
+          ["impressions",     (v) => { impressions = v; }],
+          ["avg_watched",     (v) => { avgWatched  = v; }],
+          ["conversions",     (v) => { conversions = v; }],
+          ["conversion_rate", (v) => { convRate    = v; }],
+          ["bounce_rate",     (v) => { bounceRate  = v; }],
+          ["cta_clicks",      (v) => { ctaClicks   = v; }],
+        ];
+        for (const [metric, assign] of extraMetrics) {
+          const tlUrl = `https://api.vidalytics.com/public/v1/stats/videos/timeline`
+                      + `?videoGuids=${VIDALYTICS_VIDEO_ID}&segment=segment.all`
+                      + `&dateFrom=${dateStr}&dateTo=${dateStr}&metrics=${metric}`;
+          const tlRes = await fetch(tlUrl, { headers: vidHeaders });
+          if (tlRes.ok) {
+            const tlData = await tlRes.json();
+            for (const item of tlData.content?.data || []) {
+              for (const entry of item.data || []) {
+                for (const vidEntry of entry.data || []) {
+                  const val = vidEntry.metrics?.[metric];
+                  if (val != null) assign(val);
+                }
               }
             }
           }
+          await sleep(1500);
         }
       } catch(e) {
-        console.warn(`[Vidalytics] Timeline fetch failed for ${dateStr}: ${e.message}`);
+        console.warn(`[Vidalytics] Extra metrics fetch failed for ${dateStr}: ${e.message}`);
       }
 
       newOverallRows.push([
@@ -1201,60 +1207,38 @@ async function syncVidalytics() {
     }
 
     for (const chunk of chunks) {
-      const tagsByDate = await fetchVidalyticsTags(chunk.from, chunk.to, vidHeaders);
-      await sleep(5000);
-
-      for (const dateStr of chunk.dates) {
-        const tagData = tagsByDate[dateStr] || {};
-        for (const [tag, m] of Object.entries(tagData)) {
-          if (tag === "Non-Tagged" || tag === "All" || tag === "all") continue;
-          const key = `${dateStr}__${tag}`;
-          if (!existingTagKeys.has(key)) {
-            newTagRows.push([
-              dateStr, tag,
-              m.plays            ?? 0,
-              m.impressions      ?? 0,
-              m.unique_viewers   ?? 0,
-              round2(m.play_rate),
-              round2(m.unmute_rate),
-              round2(m.avg_watched),
-              m.conversions      ?? 0,
-              round2(m.conversion_rate),
-              round2(m.bounce_rate),
-              m.cta_clicks       ?? 0,
-            ]);
-            existingTagKeys.add(key);
+      try {
+        const tagsByDate = await fetchVidalyticsTags(chunk.from, chunk.to, vidHeaders);
+        await sleep(5000);
+        for (const dateStr of chunk.dates) {
+          const tagData = tagsByDate[dateStr] || {};
+          for (const [tag, m] of Object.entries(tagData)) {
+            if (tag === "Non-Tagged" || tag === "All" || tag === "all") continue;
+            const key = `${dateStr}__${tag}`;
+            if (!existingTagKeys.has(key)) {
+              newTagRows.push([
+                dateStr, tag,
+                m.plays            ?? 0,
+                m.impressions      ?? 0,
+                m.unique_viewers   ?? 0,
+                round2(m.play_rate),
+                round2(m.unmute_rate),
+                round2(m.avg_watched),
+                m.conversions      ?? 0,
+                round2(m.conversion_rate),
+                round2(m.bounce_rate),
+                m.cta_clicks       ?? 0,
+              ]);
+              existingTagKeys.add(key);
+            }
           }
         }
+      } catch(e) {
+        console.warn(`[Vidalytics] Tags fetch failed for chunk ${chunk.from}-${chunk.to}: ${e.message}`);
       }
     }
 
-    // ── Content tab: filter by utm_content per active entry ──
-    if (activeContents.length > 0) {
-      for (const utmContent of activeContents) {
-        console.log(`[Vidalytics] Fetching content filter: ${utmContent}`);
-
-        for (const chunk of chunks) {
-          const byDate = await fetchVidalyticsContentTimeline(chunk.from, chunk.to, utmContent, vidHeaders);
-          await sleep(5000);
-
-          for (const dateStr of chunk.dates) {
-            const key = `${dateStr}__${utmContent}`;
-            if (existingContentKeys.has(key)) continue;
-
-            const m = byDate[dateStr] || {};
-            newContentRows.push([
-              dateStr, utmContent, m.plays ?? 0,
-            ]);
-            existingContentKeys.add(key);
-          }
-        }
-
-        await sleep(3000);
-      }
-    } else {
-      console.log("[Vidalytics sync] No active UTM contents in config tab — skipping content sync");
-    }
+    // Content filter (filter.url_params) is Enterprise-only — skipped
 
     // ── Write all new rows ──
     if (newOverallRows.length) {
