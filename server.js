@@ -1036,7 +1036,6 @@ async function syncVidalytics() {
 
     await ensureTab(sheets, VIDALYTICS_TAB);
     await ensureTab(sheets, VIDALYTICS_TAGS_TAB);
-    await ensureTab(sheets, VIDALYTICS_CONTENT_TAB);
 
     // ── Ensure headers ──
     const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
@@ -1061,34 +1060,17 @@ async function syncVidalytics() {
       });
     }
 
-    const existingContent = await readTab(sheets, VIDALYTICS_CONTENT_TAB);
-    if (!existingContent.length || existingContent[0].join(",") !== VIDALYTICS_CONTENT_HEADERS.join(",")) {
-      await sheets.spreadsheets.values.clear({ spreadsheetId: SPREADSHEET_ID, range: `${VIDALYTICS_CONTENT_TAB}!A:Z` });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${VIDALYTICS_CONTENT_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [VIDALYTICS_CONTENT_HEADERS] },
-      });
-    }
 
     // Re-read after potential header rewrite
     const overallRows  = await readTab(sheets, VIDALYTICS_TAB);
     const tagsRows     = await readTab(sheets, VIDALYTICS_TAGS_TAB);
-    const contentRows  = await readTab(sheets, VIDALYTICS_CONTENT_TAB);
 
     // Key on date+video label to support multiple videos per date
     const existingOverallDates = new Set(overallRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean));
     const existingTagKeys      = new Set(
       tagsRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
     );
-    const existingContentKeys  = new Set(
-      contentRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
-    );
 
-    // Read active utm_content values from config tab
-    const activeContents = await readVidalyticsConfig(sheets);
-    console.log(`[Vidalytics sync] Active UTM contents: ${activeContents.join(", ") || "none"}`);
 
     // Build date range from launch through yesterday
     const LAUNCH_DATE  = "2026-05-17";
@@ -1118,7 +1100,6 @@ async function syncVidalytics() {
     const sleep          = ms => new Promise(r => setTimeout(r, ms));
     const newOverallRows = [];
     const newTagRows     = [];
-    const newContentRows = [];
     const round2         = v => v != null ? Math.round(v * 100) / 100 : 0;
 
     // ── Overall tab: loop over both videos ──
@@ -1246,34 +1227,9 @@ async function syncVidalytics() {
       }
     }
 
-    // ── Content tab: filter by utm_content per active entry ──
-    if (activeContents.length > 0) {
-      for (const utmContent of activeContents) {
-        console.log(`[Vidalytics] Fetching content filter: ${utmContent}`);
+    // Content filter (filter.url_params) is Enterprise-only — removed
 
-        for (const chunk of chunks) {
-          const byDate = await fetchVidalyticsContentTimeline(chunk.from, chunk.to, utmContent, vidHeaders);
-          await sleep(5000);
-
-          for (const dateStr of chunk.dates) {
-            const key = `${dateStr}__${utmContent}`;
-            if (existingContentKeys.has(key)) continue;
-
-            const m = byDate[dateStr] || {};
-            newContentRows.push([
-              dateStr, utmContent, m.plays ?? 0,
-            ]);
-            existingContentKeys.add(key);
-          }
-        }
-
-        await sleep(3000);
-      }
-    } else {
-      console.log("[Vidalytics sync] No active UTM contents in config tab — skipping content sync");
-    }
-
-    // ── Write all new rows ──
+        // ── Write all new rows ──
     if (newOverallRows.length) {
       await appendRows(sheets, VIDALYTICS_TAB, newOverallRows);
       console.log(`[Vidalytics sync] Overall: appended ${newOverallRows.length} row(s)`);
@@ -1288,12 +1244,6 @@ async function syncVidalytics() {
       console.log(`[Vidalytics sync] Tags: nothing new`);
     }
 
-    if (newContentRows.length) {
-      await appendRows(sheets, VIDALYTICS_CONTENT_TAB, newContentRows);
-      console.log(`[Vidalytics sync] Content: appended ${newContentRows.length} row(s)`);
-    } else {
-      console.log(`[Vidalytics sync] Content: nothing new`);
-    }
 
   } catch (err) {
     console.error("[Vidalytics sync error]", err.message);
