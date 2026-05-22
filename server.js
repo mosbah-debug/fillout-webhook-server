@@ -1179,6 +1179,7 @@ async function syncVidalytics() {
           dateStr, videoLabel, plays, impressions, playsUnique, playRate, unmuteRate,
           round2(avgWatched), avgWatchDuration, conversions, round2(convRate), round2(bounceRate), ctaClicks,
         ]);
+        existingOverallDates.add(rowKey); // prevent duplicates within same sync run
         console.log(`[Vidalytics] ${videoLabel} ${dateStr} plays=${plays} impressions=${impressions} avgWatched=${round2(avgWatched)}% avgDuration=${avgWatchDuration}s`);
         await sleep(2000);
       }
