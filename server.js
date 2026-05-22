@@ -192,7 +192,7 @@ const FILLOUT_LOG_HEADERS = [
   "Are you retired, looking to retire in the next 5 years, or looking to retire in the next 10 years?",
   "How many of our educational YouTube videos would you guess you've watched?",
   "How did you hear about Peak Financial Planning?",
-  "(OPTIONAL) Please share any additional information related to your goals or pain points you think would be helpful",
+  "(OPTIONAL) Please share any additional information related to your goals or pain points you think would be helpful", "Meeting Date"
 ];
 
 const WEBINAR_TAB     = "Webinar";
@@ -202,7 +202,7 @@ const WEBINAR_HEADERS = [
   "utm_source", "utm_content",
   "Will the retirement planning be just yourself or include a spouse/partner",
   "About how much have you saved for retirement?",
-  "Are you retired, looking to retire in the next 5 years, or looking to retire in the next 10 years?",
+  "Are you retired, looking to retire in the next 5 years, or looking to retire in the next 10 years?", "Meeting Date"
 ];
 
 async function ensureFilloutHeaders(sheets) {
@@ -252,6 +252,7 @@ async function batchLogWebinar(sheets, submissions) {
       extractFilloutField(q, "spouse", "partner"),
       extractFilloutField(q, "how much have you saved"),
       extractFilloutField(q, "retired", "looking to retire"),
+      meeting?.eventStartTime || "",
     ];
   });
   await appendRows(sheets, WEBINAR_TAB, rows);
@@ -297,6 +298,7 @@ async function batchLogSubmissions(sheets, submissions) {
       extractFilloutField(q, "youtube videos"),
       extractFilloutField(q, "how did you hear"),
       extractFilloutField(q, "additional information", "goals or pain points"),
+      (() => { const s = sub.scheduling || []; return s[0]?.value?.eventStartTime || ""; })(),
     ];
   });
   await appendRows(sheets, FILLOUT_LOG_TAB, rows);
