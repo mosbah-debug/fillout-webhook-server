@@ -1530,7 +1530,7 @@ async function syncMeetings() {
     for (const m of allMeetings) {
       const ts = m.properties.hs_meeting_start_time || m.properties.hs_timestamp;
       if (!ts) continue;
-      const date = new Date(parseInt(ts)).toISOString().split("T")[0];
+      const date = new Date(ts).toISOString().split("T")[0];
       if (!byDate[date]) byDate[date] = { total: 0, completed: 0, noShow: 0, canceled: 0, rescheduled: 0, other: 0 };
       const outcome = (m.properties.hs_meeting_outcome || "").toUpperCase();
       byDate[date].total++;
