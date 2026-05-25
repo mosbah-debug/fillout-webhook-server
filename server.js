@@ -36,6 +36,11 @@ const LT_UTM_FILTERS  = [
   "retiring_married",
 ];
 
+const MEETINGS_TAB     = "Meetings";
+const MEETINGS_HEADERS = [
+  "Date", "Total Booked", "Completed", "No Show", "Canceled", "Rescheduled", "Other/Unknown", "No Show Rate",
+];
+
 // ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
 
@@ -1470,6 +1475,115 @@ app.get("/sync-lp", async (req, res) => {
   res.json({ success: true, message: "Landing page analytics sync started" });
 });
 
+async function syncMeetings() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, MEETINGS_TAB);
+
+    // Read existing rows to build upsert map (date -> sheet row number)
+    const existing = await readTab(sheets, MEETINGS_TAB);
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${MEETINGS_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [MEETINGS_HEADERS] },
+      });
+    }
+    const dateToRowIndex = {};
+    for (let i = 1; i < existing.length; i++) {
+      if (existing[i][0]) dateToRowIndex[existing[i][0]] = i + 1; // 1-based sheet row
+    }
+
+    // Fetch all meetings from HubSpot (paginated)
+    const allMeetings = [];
+    let after = undefined;
+    do {
+      const body = {
+        filterGroups: [],
+        properties: ["hs_meeting_outcome", "hs_meeting_start_time", "hs_timestamp"],
+        limit: 100,
+        ...(after ? { after } : {}),
+      };
+      const res = await fetch("https://api.hubapi.com/crm/v3/objects/meetings/search", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`HubSpot meetings API error ${res.status}: ${err}`);
+      }
+      const data = await res.json();
+      allMeetings.push(...(data.results || []));
+      after = data.paging?.next?.after;
+    } while (after);
+
+    console.log(`[Meetings] Fetched ${allMeetings.length} total meetings`);
+
+    // Group by date using start time, fallback to created timestamp
+    const byDate = {};
+    for (const m of allMeetings) {
+      const ts = m.properties.hs_meeting_start_time || m.properties.hs_timestamp;
+      if (!ts) continue;
+      const date = new Date(parseInt(ts)).toISOString().split("T")[0];
+      if (!byDate[date]) byDate[date] = { total: 0, completed: 0, noShow: 0, canceled: 0, rescheduled: 0, other: 0 };
+      const outcome = (m.properties.hs_meeting_outcome || "").toUpperCase();
+      byDate[date].total++;
+      if      (outcome === "COMPLETED")   byDate[date].completed++;
+      else if (outcome === "NO_SHOW")     byDate[date].noShow++;
+      else if (outcome === "CANCELED")    byDate[date].canceled++;
+      else if (outcome === "RESCHEDULED") byDate[date].rescheduled++;
+      else                                byDate[date].other++;
+    }
+
+    const toAppend = [];
+    let updated = 0;
+
+    for (const [date, counts] of Object.entries(byDate)) {
+      const noShowRate = counts.total > 0
+        ? Math.round((counts.noShow / counts.total) * 100) + "%"
+        : "0%";
+      const row = [
+        date,
+        counts.total,
+        counts.completed,
+        counts.noShow,
+        counts.canceled,
+        counts.rescheduled,
+        counts.other,
+        noShowRate,
+      ];
+
+      if (dateToRowIndex[date] !== undefined) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `${MEETINGS_TAB}!A${dateToRowIndex[date]}`,
+          valueInputOption: "RAW",
+          requestBody: { values: [row] },
+        });
+        updated++;
+      } else {
+        toAppend.push(row);
+      }
+    }
+
+    toAppend.sort((a, b) => a[0].localeCompare(b[0]));
+    if (toAppend.length) {
+      await appendRows(sheets, MEETINGS_TAB, toAppend);
+    }
+
+    console.log(`[Meetings] Updated ${updated} rows, appended ${toAppend.length} new days`);
+
+  } catch (err) {
+    console.error("[Meetings sync error]", err.message);
+  }
+}
+
 app.get("/sync-lt", async (req, res) => {
   if (req.query.clear === "true") {
     try {
@@ -1488,6 +1602,11 @@ app.get("/sync-lt", async (req, res) => {
   res.json({ success: true, message: "Live training page analytics sync started" });
 });
 
+app.get("/sync-meetings", async (req, res) => {
+  syncMeetings();
+  res.json({ success: true, message: "Meetings sync started in background" });
+});
+
 app.get("/sync-vidalytics", async (req, res) => {
   syncVidalytics();
   res.json({ success: true, message: "Vidalytics sync started in background" });
@@ -1504,6 +1623,7 @@ setTimeout(() => {
   syncWebinarForm();
   syncLandingPageAnalytics();
   syncLiveTrainingPage();
+  syncMeetings();
 }, 10_000);
 
 // Vidalytics delayed separately to avoid rate limit conflicts on startup
@@ -1518,6 +1638,7 @@ setInterval(syncWebinar,              60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 setInterval(syncLiveTrainingPage,     60 * 60 * 1000); // every hour
+setInterval(syncMeetings,             60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
