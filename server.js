@@ -1488,34 +1488,39 @@ async function syncUTMContent() {
     const toAppend = [];
     let updated = 0;
 
-    for (const utmValue of UTM_CONTENT_FILTERS) {
-      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/daily`
-                + `?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
+    // Use the same landing-pages endpoint as LP sync (proven working),
+    // with breakdown=utm-content to split results per UTM value per day.
+    // Response shape: { "YYYYMMDD": [ { breakdownValue, rawViews, sessions, ... }, ... ] }
+    const url = `https://api.hubapi.com/analytics/v2/reports/landing-pages/summarize/daily`
+              + `?start=${fmt(start)}&end=${fmt(end)}&f=${LP_PAGE_ID}&breakdown=utm-content`;
 
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
-      });
-      if (!res.ok) {
-        console.warn(`[UTM Content] Failed for "${utmValue}": ${res.status}`);
-        continue;
-      }
-      const data = await res.json();
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`HubSpot UTM content analytics error ${res.status}: ${errText}`);
+    }
+    const data = await res.json();
 
-      for (const [date, values] of Object.entries(data)) {
-        // Skip non-date aggregate keys returned by the API
-        if (!/^\d{8}$/.test(date)) continue;
-        const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
+    for (const [date, rows] of Object.entries(data)) {
+      if (!Array.isArray(rows)) continue;
+      for (const d of rows) {
+        const utmValue = d.breakdownValue || d.utmContent || d.utm_content || "";
+        // Only keep the UTM values we care about
+        if (!UTM_CONTENT_FILTERS.includes(utmValue)) continue;
+
         const row = [
           date,
           utmValue,
-          d.sessions          || d.visits        || 0,
-          d.rawViews          || d.pageviews      || 0,
-          d.pagesPerSession   || d.pageViews      || 0,
-          d.bounceRate        ? Math.round(d.bounceRate * 100) + "%" : "0%",
-          d.timePerSession    ? Math.round(d.timePerSession) : 0,
-          d.newVisitorRawViews || d.newVisitors   || 0,
-          d.contacts          || 0,
-          d.customers         || 0,
+          d.sessions           || d.visits              || 0,
+          d.rawViews           || d.pageviews            || 0,
+          d.pagesPerSession    || 0,
+          d.bounceRate         ? Math.round(d.bounceRate * 100) + "%" : "0%",
+          d.timePerPageview    ? Math.round(d.timePerPageview) : 0,
+          d.newVisitorRawViews || d.newVisitors           || 0,
+          d.contacts           || 0,
+          d.customers          || 0,
         ];
 
         const key = `${date}__${utmValue}`;
