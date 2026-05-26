@@ -1489,7 +1489,7 @@ async function syncUTMContent() {
     let updated = 0;
 
     for (const utmValue of UTM_CONTENT_FILTERS) {
-      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total`
+      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/daily`
                 + `?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
 
       const res = await fetch(url, {
@@ -1502,6 +1502,8 @@ async function syncUTMContent() {
       const data = await res.json();
 
       for (const [date, values] of Object.entries(data)) {
+        // Skip non-date aggregate keys returned by the API
+        if (!/^\d{8}$/.test(date)) continue;
         const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
         const row = [
           date,
