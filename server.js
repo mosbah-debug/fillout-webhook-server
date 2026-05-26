@@ -41,6 +41,18 @@ const MEETINGS_HEADERS = [
   "Date", "Total Booked", "Completed", "No Show", "Canceled", "Rescheduled", "Other/Unknown", "No Show Rate",
 ];
 
+const UTM_CONTENT_TAB     = "Page views/UTM content";
+const UTM_CONTENT_HEADERS = [
+  "Date", "UTM Content", "Sessions", "Page Views", "Pages/Session",
+  "Bounce Rate", "Avg Time on Page", "New Visitors", "Contacts", "Customers",
+];
+const UTM_CONTENT_FILTERS = [
+  "3.13_m_all_pretax",
+  "webinar_title",
+  "more_than_2m_to_retire",
+  "retiring_married",
+];
+
 // ── PIPELINE / STAGE MAP ─────────────────────────────────────────────────────
 const STAGE_MAP = {};
 
@@ -1445,6 +1457,93 @@ app.post("/webhook/webinar", async (req, res) => {
 });
 
 // ── MANUAL ENDPOINTS ──────────────────────────────────────────────────────────
+async function syncUTMContent() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, UTM_CONTENT_TAB);
+
+    // Read existing rows to build upsert map keyed by "date__utmValue"
+    const existing = await readTab(sheets, UTM_CONTENT_TAB);
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${UTM_CONTENT_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [UTM_CONTENT_HEADERS] },
+      });
+    }
+    // Map "date__utm" -> sheet row number (1-based)
+    const keyToRowIndex = {};
+    for (let i = 1; i < existing.length; i++) {
+      const row = existing[i];
+      if (row[0] && row[1]) keyToRowIndex[`${row[0]}__${row[1]}`] = i + 1;
+    }
+
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
+
+    const toAppend = [];
+    let updated = 0;
+
+    for (const utmValue of UTM_CONTENT_FILTERS) {
+      const url = `https://api.hubspot.com/analytics/v2/reports/utm-contents/total`
+                + `?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
+
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+      });
+      if (!res.ok) {
+        console.warn(`[UTM Content] Failed for "${utmValue}": ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+
+      for (const [date, values] of Object.entries(data)) {
+        const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
+        const row = [
+          date,
+          utmValue,
+          d.sessions          || d.visits        || 0,
+          d.rawViews          || d.pageviews      || 0,
+          d.pagesPerSession   || d.pageViews      || 0,
+          d.bounceRate        ? Math.round(d.bounceRate * 100) + "%" : "0%",
+          d.timePerSession    ? Math.round(d.timePerSession) : 0,
+          d.newVisitorRawViews || d.newVisitors   || 0,
+          d.contacts          || 0,
+          d.customers         || 0,
+        ];
+
+        const key = `${date}__${utmValue}`;
+        if (keyToRowIndex[key] !== undefined) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `${UTM_CONTENT_TAB}!A${keyToRowIndex[key]}`,
+            valueInputOption: "RAW",
+            requestBody: { values: [row] },
+          });
+          updated++;
+        } else {
+          toAppend.push(row);
+          keyToRowIndex[key] = -1; // prevent duplicates within this run
+        }
+      }
+    }
+
+    toAppend.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+    if (toAppend.length) {
+      await appendRows(sheets, UTM_CONTENT_TAB, toAppend);
+    }
+
+    console.log(`[UTM Content] Updated ${updated} rows, appended ${toAppend.length} new rows`);
+
+  } catch (err) {
+    console.error("[UTM Content sync error]", err.message);
+  }
+}
+
 app.get("/sync", async (req, res) => {
   syncInProgress();
   res.json({ success: true, message: "Fillout sync started in background" });
@@ -1602,6 +1701,11 @@ app.get("/sync-lt", async (req, res) => {
   res.json({ success: true, message: "Live training page analytics sync started" });
 });
 
+app.get("/sync-utm", async (req, res) => {
+  syncUTMContent();
+  res.json({ success: true, message: "UTM content sync started" });
+});
+
 app.get("/sync-meetings", async (req, res) => {
   syncMeetings();
   res.json({ success: true, message: "Meetings sync started in background" });
@@ -1624,6 +1728,7 @@ setTimeout(() => {
   syncLandingPageAnalytics();
   syncLiveTrainingPage();
   syncMeetings();
+  syncUTMContent();
 }, 10_000);
 
 // Vidalytics delayed separately to avoid rate limit conflicts on startup
@@ -1639,6 +1744,7 @@ setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 setInterval(syncLiveTrainingPage,     60 * 60 * 1000); // every hour
 setInterval(syncMeetings,             60 * 60 * 1000); // every hour
+setInterval(syncUTMContent,           60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
