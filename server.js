@@ -1507,7 +1507,8 @@ async function syncUTMContent() {
 
       for (const [date, values] of Object.entries(data)) {
         // Skip aggregate keys like breakdowns, offset, total, totals
-        if (!/^\d{8}$/.test(date)) continue;
+        // API returns dates as "2026-05-17" (YYYY-MM-DD) or "20260517" (YYYYMMDD)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) && !/^\d{8}$/.test(date)) continue;
         const d = Array.isArray(values) ? (values[0] || {}) : (values || {});
 
         const row = [
