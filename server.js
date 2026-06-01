@@ -1485,8 +1485,8 @@ async function syncUTMContent() {
     start.setDate(start.getDate() - 30);
     const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
 
-    const toAppend = [];
-    let updated = 0;
+    const toAppend   = [];
+    const utmBatch   = [];
 
     // Use the same landing-pages endpoint as LP sync (proven working),
     // Query each UTM value using the daily breakdown endpoint.
@@ -1526,13 +1526,7 @@ async function syncUTMContent() {
 
         const key = `${date}__${utmValue}`;
         if (keyToRowIndex[key] !== undefined) {
-          await sheets.spreadsheets.values.update({
-            spreadsheetId: SPREADSHEET_ID,
-            range: `${UTM_CONTENT_TAB}!A${keyToRowIndex[key]}`,
-            valueInputOption: "RAW",
-            requestBody: { values: [row] },
-          });
-          updated++;
+          utmBatch.push({ range: `${UTM_CONTENT_TAB}!A${keyToRowIndex[key]}`, values: [row] });
         } else {
           toAppend.push(row);
           keyToRowIndex[key] = -1;
@@ -1540,12 +1534,19 @@ async function syncUTMContent() {
       }
     }
 
+    if (utmBatch.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: { valueInputOption: "RAW", data: utmBatch },
+      });
+    }
+
     toAppend.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
     if (toAppend.length) {
       await appendRows(sheets, UTM_CONTENT_TAB, toAppend);
     }
 
-    console.log(`[UTM Content] Updated ${updated} rows, appended ${toAppend.length} new rows`);
+    console.log(`[UTM Content] Updated ${utmBatch.length} rows, appended ${toAppend.length} new rows`);
 
   } catch (err) {
     console.error("[UTM Content sync error]", err.message);
@@ -1648,8 +1649,8 @@ async function syncMeetings() {
       else                                byDate[date].other++;
     }
 
-    const toAppend = [];
-    let updated = 0;
+    const toAppend      = [];
+    const meetingsBatch = [];
 
     for (const [date, counts] of Object.entries(byDate)) {
       const noShowRate = counts.total > 0
@@ -1667,16 +1668,17 @@ async function syncMeetings() {
       ];
 
       if (dateToRowIndex[date] !== undefined) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `${MEETINGS_TAB}!A${dateToRowIndex[date]}`,
-          valueInputOption: "RAW",
-          requestBody: { values: [row] },
-        });
-        updated++;
+        meetingsBatch.push({ range: `${MEETINGS_TAB}!A${dateToRowIndex[date]}`, values: [row] });
       } else {
         toAppend.push(row);
       }
+    }
+
+    if (meetingsBatch.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: { valueInputOption: "RAW", data: meetingsBatch },
+      });
     }
 
     toAppend.sort((a, b) => a[0].localeCompare(b[0]));
@@ -1684,7 +1686,7 @@ async function syncMeetings() {
       await appendRows(sheets, MEETINGS_TAB, toAppend);
     }
 
-    console.log(`[Meetings] Updated ${updated} rows, appended ${toAppend.length} new days`);
+    console.log(`[Meetings] Updated ${meetingsBatch.length} rows, appended ${toAppend.length} new days`);
 
   } catch (err) {
     console.error("[Meetings sync error]", err.message);
