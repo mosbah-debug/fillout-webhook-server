@@ -42,10 +42,12 @@ const MEETINGS_HEADERS = [
 ];
 
 const UTM_CONTENT_TAB     = "Page views/UTM content";
+const UTM_CONFIG_TAB      = "UTM Config";
 const UTM_CONTENT_HEADERS = [
   "Date", "UTM Content", "Sessions", "Page Views", "Pages/Session",
   "Bounce Rate", "Avg Time on Page", "New Visitors", "Contacts", "Customers",
 ];
+// Fallback hardcoded list — used only if UTM Config tab is empty
 const UTM_CONTENT_FILTERS = [
   "3.13_m_all_pretax",
   "webinar_title",
@@ -979,6 +981,31 @@ async function readVidalyticsConfig(sheets) {
     .map(r => r[0].trim());
 }
 
+// Read active UTM content values from "UTM Config" tab
+// Tab columns: UTM Content | Active (yes/no)
+async function readUTMConfig(sheets) {
+  await ensureTab(sheets, UTM_CONFIG_TAB);
+  const rows = await readTab(sheets, UTM_CONFIG_TAB);
+
+  // If tab is empty or only has header, seed it with the hardcoded defaults
+  if (rows.length < 2) {
+    const headerRow  = ["UTM Content", "Active"];
+    const defaultRows = UTM_CONTENT_FILTERS.map(v => [v, "yes"]);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${UTM_CONFIG_TAB}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [headerRow, ...defaultRows] },
+    });
+    return UTM_CONTENT_FILTERS;
+  }
+
+  // Skip header, return values where Active = "yes"
+  return rows.slice(1)
+    .filter(r => r[0] && r[1]?.toLowerCase() === "yes")
+    .map(r => r[0].trim());
+}
+
 // Fetch timeline data filtered by url_param for a single utm_content value
 // Returns: { "YYYY-MM-DD": { plays, impressions, ... } }
 async function fetchVidalyticsContentTimeline(dateFrom, dateTo, utmContent, vidHeaders) {
@@ -1488,10 +1515,13 @@ async function syncUTMContent() {
     const toAppend   = [];
     const utmBatch   = [];
 
-    // Use the same landing-pages endpoint as LP sync (proven working),
+    // Read active UTM values dynamically from the "UTM Config" sheet tab
+    const activeUTMs = await readUTMConfig(sheets);
+    console.log(`[UTM Content] Tracking ${activeUTMs.length} UTM values: ${activeUTMs.join(", ")}`);
+
     // Query each UTM value using the daily breakdown endpoint.
-    // The /summarize/daily endpoint with breakdown=utm-content returns per-UTM rows per day.
-    for (const utmValue of UTM_CONTENT_FILTERS) {
+    // The /summarize/daily endpoint returns per-UTM rows per day.
+    for (const utmValue of activeUTMs) {
       const url = `https://api.hubapi.com/analytics/v2/reports/utm-contents/summarize/daily`
                 + `?start=${fmt(start)}&end=${fmt(end)}&f=${encodeURIComponent(utmValue)}`;
 
