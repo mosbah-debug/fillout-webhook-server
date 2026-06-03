@@ -942,11 +942,6 @@ async function syncLiveTrainingPage() {
       });
     }
 
-    const end   = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - 30);
-    const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
-
     const newUTMRows = [];
 
     // Fetch daily page stats for the livetraining page broken down by utm_content.
