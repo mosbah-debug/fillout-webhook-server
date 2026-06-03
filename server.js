@@ -847,12 +847,85 @@ async function syncLandingPageAnalytics() {
   }
 }
 
-const LT_PAGE_ID = "405603080417";
+const LT_PAGE_ID      = "405603080417";
+const LT_PV_TAB       = "LT Page Visits";
+const LT_PV_HEADERS   = [
+  "Date", "Page Views", "New Visitors", "Entrances", "Exits",
+  "Bounce Rate", "Avg Time on Page (s)",
+];
 
 async function syncLiveTrainingPage() {
   try {
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
+
+    // ── Page Visits ───────────────────────────────────────────────────────────
+    await ensureTab(sheets, LT_PV_TAB);
+
+    const existing = await readTab(sheets, LT_PV_TAB);
+    if (!existing.length || existing[0][0] !== "Date") {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${LT_PV_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody: { values: [LT_PV_HEADERS] },
+      });
+    }
+    const pvDateToRow = {};
+    for (let i = 1; i < existing.length; i++) {
+      if (existing[i][0]) pvDateToRow[existing[i][0]] = i + 1;
+    }
+
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    const fmt = d => d.toISOString().split("T")[0].replace(/-/g, "");
+
+    const pvUrl = `https://api.hubapi.com/analytics/v2/reports/landing-pages/summarize/daily`
+                + `?start=${fmt(start)}&end=${fmt(end)}&f=${LT_PAGE_ID}`;
+
+    const pvRes = await fetch(pvUrl, {
+      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
+    });
+    if (!pvRes.ok) {
+      const errText = await pvRes.text();
+      throw new Error(`HubSpot LT page visits error ${pvRes.status}: ${errText}`);
+    }
+    const pvData  = await pvRes.json();
+    const pvBatch = [];
+    const pvAppend = [];
+
+    for (const [date, values] of Object.entries(pvData)) {
+      const d = values[0] || {};
+      const row = [
+        date,
+        d.rawViews || 0,
+        d.newVisitorRawViews || 0,
+        d.entrances || 0,
+        d.exits || 0,
+        d.pageBounceRate ? Math.round(d.pageBounceRate * 100) + "%" : "0%",
+        d.timePerPageview ? Math.round(d.timePerPageview) : 0,
+      ];
+      if (pvDateToRow[date] !== undefined) {
+        pvBatch.push({ range: `${LT_PV_TAB}!A${pvDateToRow[date]}`, values: [row] });
+      } else {
+        pvAppend.push(row);
+      }
+    }
+
+    if (pvBatch.length) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: { valueInputOption: "RAW", data: pvBatch },
+      });
+    }
+    pvAppend.sort((a, b) => a[0].localeCompare(b[0]));
+    if (pvAppend.length) {
+      await appendRows(sheets, LT_PV_TAB, pvAppend);
+    }
+    console.log(`[LT Page Visits] Updated ${pvBatch.length} rows, appended ${pvAppend.length} new days`);
+
+    // ── UTM Content ───────────────────────────────────────────────────────────
     await ensureTab(sheets, LT_UTM_TAB);
 
     const existingUTM = await readTab(sheets, LT_UTM_TAB);
