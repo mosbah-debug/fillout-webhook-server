@@ -1835,7 +1835,7 @@ app.get("/sync-utm", async (req, res) => {
 });
 
 // Generic meeting sync — fetches meetings by title keyword, groups by date using the given timestamp field
-async function syncMeetingsByType({ tab, headers, titleKeyword, timestampField }) {
+async function syncMeetingsByType({ tab, headers, titleKeyword, excludeKeyword, timestampField }) {
   const auth   = getGoogleAuth();
   const sheets = google.sheets({ version: "v4", auth });
   await ensureTab(sheets, tab);
@@ -1857,8 +1857,13 @@ async function syncMeetingsByType({ tab, headers, titleKeyword, timestampField }
   const allMeetings = [];
   let after = undefined;
   do {
+    // Build filters: must contain titleKeyword, optionally must NOT contain excludeKeyword
+    const filters = [{ propertyName: "hs_meeting_title", operator: "CONTAINS_TOKEN", value: titleKeyword }];
+    if (excludeKeyword) {
+      filters.push({ propertyName: "hs_meeting_title", operator: "NOT_CONTAINS_TOKEN", value: excludeKeyword });
+    }
     const body = {
-      filterGroups: [{ filters: [{ propertyName: "hs_meeting_title", operator: "CONTAINS_TOKEN", value: titleKeyword }] }],
+      filterGroups: [{ filters }],
       properties: ["hs_meeting_title", "hs_meeting_start_time", "hs_createdate", "hs_timestamp", "hubspot_owner_id"],
       limit: 100,
       ...(after ? { after } : {}),
@@ -1916,7 +1921,8 @@ async function syncInvestments1Meetings() {
   try {
     await syncMeetingsByType({
       tab: INV1_TAB, headers: INV1_HEADERS,
-      titleKeyword: "Investments 1",
+      titleKeyword: "Investments Meeting",
+      excludeKeyword: "Meeting 2",
       timestampField: "hs_meeting_start_time",
     });
   } catch (err) { console.error("[Inv1 Meetings sync error]", err.message); }
