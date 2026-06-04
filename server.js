@@ -1916,7 +1916,7 @@ async function syncInvestments1Meetings() {
   try {
     await syncMeetingsByType({
       tab: INV1_TAB, headers: INV1_HEADERS,
-      titleKeyword: "Investments Meeting 1",
+      titleKeyword: "Investments 1",
       timestampField: "hs_meeting_start_time",
     });
   } catch (err) { console.error("[Inv1 Meetings sync error]", err.message); }
@@ -1926,7 +1926,7 @@ async function syncPartnershipKickoffMeetings() {
   try {
     await syncMeetingsByType({
       tab: PKO_TAB, headers: PKO_HEADERS,
-      titleKeyword: "Partnership Kickoff",
+      titleKeyword: "Partnership Kick Off",
       timestampField: "hs_createdate",
     });
   } catch (err) { console.error("[PKO Meetings sync error]", err.message); }
