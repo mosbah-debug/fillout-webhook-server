@@ -41,6 +41,26 @@ const MEETINGS_HEADERS = [
   "Date", "Total Booked", "Completed", "No Show", "Canceled", "Rescheduled", "Other/Unknown", "No Show Rate",
 ];
 
+const MEETING_OWNERS = [
+  { id: "30558812", name: "Sean Stevenson"  },
+  { id: "30556626", name: "Joseph Perez"    },
+  { id: "83394428", name: "Amrit Khatkar"   },
+  { id: "31931535", name: "Adam Haynes"     },
+  { id: "32930333", name: "Cody Emerson"    },
+  { id: "33160574", name: "Edward Strube"   },
+];
+const MEETING_HEADERS = ["Date", ...MEETING_OWNERS.map(o => o.name), "Total"];
+
+const INV2_TAB     = "Investments 2 Meetings";
+const INV2_OWNERS  = MEETING_OWNERS;
+const INV2_HEADERS = MEETING_HEADERS;
+
+const INV1_TAB     = "Investments 1 Meetings";
+const INV1_HEADERS = MEETING_HEADERS;
+
+const PKO_TAB      = "Partnership Kickoff Meetings";
+const PKO_HEADERS  = MEETING_HEADERS;
+
 const UTM_CONTENT_TAB     = "Page views/UTM content";
 const UTM_CONFIG_TAB      = "UTM Config";
 const UTM_CONTENT_HEADERS = [
@@ -1814,9 +1834,132 @@ app.get("/sync-utm", async (req, res) => {
   res.json({ success: true, message: "UTM content sync started" });
 });
 
+// Generic meeting sync — fetches meetings by title keyword, groups by date using the given timestamp field
+async function syncMeetingsByType({ tab, headers, titleKeyword, timestampField }) {
+  const auth   = getGoogleAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+  await ensureTab(sheets, tab);
+
+  const existing = await readTab(sheets, tab);
+  if (!existing.length || existing[0][0] !== "Date") {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${tab}!A1`,
+      valueInputOption: "RAW",
+      requestBody: { values: [headers] },
+    });
+  }
+  const dateToRowIndex = {};
+  for (let i = 1; i < existing.length; i++) {
+    if (existing[i][0]) dateToRowIndex[existing[i][0]] = i + 1;
+  }
+
+  const allMeetings = [];
+  let after = undefined;
+  do {
+    const body = {
+      filterGroups: [{ filters: [{ propertyName: "hs_meeting_title", operator: "CONTAINS_TOKEN", value: titleKeyword }] }],
+      properties: ["hs_meeting_title", "hs_meeting_start_time", "hs_createdate", "hs_timestamp", "hubspot_owner_id"],
+      limit: 100,
+      ...(after ? { after } : {}),
+    };
+    const res = await fetch("https://api.hubapi.com/crm/v3/objects/meetings/search", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HubSpot meetings error ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    allMeetings.push(...(data.results || []));
+    after = data.paging?.next?.after;
+  } while (after);
+
+  console.log(`[${tab}] Fetched ${allMeetings.length} meetings`);
+
+  const byDate = {};
+  for (const m of allMeetings) {
+    const ts = m.properties[timestampField] || m.properties.hs_timestamp;
+    if (!ts) continue;
+    const date    = new Date(ts).toISOString().split("T")[0];
+    const ownerId = m.properties.hubspot_owner_id || "unknown";
+    if (!byDate[date]) byDate[date] = {};
+    byDate[date][ownerId] = (byDate[date][ownerId] || 0) + 1;
+  }
+
+  const toAppend  = [];
+  const batchData = [];
+
+  for (const [date, ownerCounts] of Object.entries(byDate)) {
+    const counts = MEETING_OWNERS.map(o => ownerCounts[o.id] || 0);
+    const total  = counts.reduce((a, b) => a + b, 0);
+    const row    = [date, ...counts, total];
+    if (dateToRowIndex[date] !== undefined) {
+      batchData.push({ range: `${tab}!A${dateToRowIndex[date]}`, values: [row] });
+    } else {
+      toAppend.push(row);
+    }
+  }
+
+  if (batchData.length) {
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: { valueInputOption: "RAW", data: batchData },
+    });
+  }
+  toAppend.sort((a, b) => a[0].localeCompare(b[0]));
+  if (toAppend.length) await appendRows(sheets, tab, toAppend);
+
+  console.log(`[${tab}] Updated ${batchData.length} rows, appended ${toAppend.length} new days`);
+}
+
+async function syncInvestments1Meetings() {
+  try {
+    await syncMeetingsByType({
+      tab: INV1_TAB, headers: INV1_HEADERS,
+      titleKeyword: "Investments Meeting 1",
+      timestampField: "hs_meeting_start_time",
+    });
+  } catch (err) { console.error("[Inv1 Meetings sync error]", err.message); }
+}
+
+async function syncPartnershipKickoffMeetings() {
+  try {
+    await syncMeetingsByType({
+      tab: PKO_TAB, headers: PKO_HEADERS,
+      titleKeyword: "Partnership Kickoff",
+      timestampField: "hs_createdate",
+    });
+  } catch (err) { console.error("[PKO Meetings sync error]", err.message); }
+}
+
+async function syncInvestments2Meetings() {
+  try {
+    await syncMeetingsByType({
+      tab: INV2_TAB, headers: INV2_HEADERS,
+      titleKeyword: "Investments Meeting 2",
+      timestampField: "hs_meeting_start_time",
+    });
+  } catch (err) { console.error("[Inv2 Meetings sync error]", err.message); }
+}
+
 app.get("/sync-meetings", async (req, res) => {
   syncMeetings();
   res.json({ success: true, message: "Meetings sync started in background" });
+});
+
+app.get("/sync-inv2", async (req, res) => {
+  syncInvestments2Meetings();
+  res.json({ success: true, message: "Investments 2 meetings sync started" });
+});
+
+app.get("/sync-inv1", async (req, res) => {
+  syncInvestments1Meetings();
+  res.json({ success: true, message: "Investments 1 meetings sync started" });
+});
+
+app.get("/sync-pko", async (req, res) => {
+  syncPartnershipKickoffMeetings();
+  res.json({ success: true, message: "Partnership Kickoff meetings sync started" });
 });
 
 app.get("/sync-vidalytics", async (req, res) => {
@@ -1836,6 +1979,9 @@ setTimeout(() => {
   syncLandingPageAnalytics();
   syncLiveTrainingPage();
   syncMeetings();
+  syncInvestments2Meetings();
+  syncInvestments1Meetings();
+  syncPartnershipKickoffMeetings();
   syncUTMContent();
 }, 10_000);
 
@@ -1852,7 +1998,10 @@ setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
 setInterval(syncLiveTrainingPage,     60 * 60 * 1000); // every hour
 setInterval(syncMeetings,             60 * 60 * 1000); // every hour
-setInterval(syncUTMContent,           60 * 60 * 1000); // every hour
+setInterval(syncInvestments2Meetings,      60 * 60 * 1000); // every hour
+setInterval(syncInvestments1Meetings,      60 * 60 * 1000); // every hour
+setInterval(syncPartnershipKickoffMeetings,60 * 60 * 1000); // every hour
+setInterval(syncUTMContent,                60 * 60 * 1000); // every hour
 setInterval(syncVidalytics,           24 * 60 * 60 * 1000); // every 24 hours (daily)
 
 app.listen(PORT, () => console.log(`Webhook server running on port ${PORT}`));
