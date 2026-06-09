@@ -26,8 +26,6 @@ const LP_HEADERS = [
   "Bounce Rate", "Avg Time on Page (s)", "Submissions", "Contacts", "Customers",
 ];
 
-const LT_UTM_TAB      = "LT UTM Content";
-const LT_UTM_HEADERS  = ["Date", "UTM Content", "Page Views", "New Visitors", "Entrances"];
 // Known webinar UTM content values to track
 const LT_UTM_FILTERS  = [
   "3.13_m_all_pretax",
@@ -453,11 +451,6 @@ const PROJECTS_HEADERS = [
   "Date Entered Stage 13",
 ];
 
-const STAGE_CHANGE_TAB     = "Stage Change Log";
-const STAGE_CHANGE_HEADERS = [
-  "Timestamp", "Month", "Project ID", "Project Name",
-  "Pipeline", "From Stage", "To Stage", "Source",
-];
 
 const lastKnownStage = {};
 
@@ -505,21 +498,7 @@ async function fetchAllProjects() {
   return projects;
 }
 
-const CACHE_TAB = "HubSpot Cache";
 
-async function loadStageCache(sheets) {
-  const rows = await readTab(sheets, CACHE_TAB);
-  const cache = {};
-  for (const row of rows) {
-    if (row[0] && row[1]) cache[row[0]] = row[1];
-  }
-  return cache;
-}
-
-async function saveStageCache(sheets, cache) {
-  const rows = Object.entries(cache).map(([id, stageId]) => [id, stageId]);
-  await writeTab(sheets, CACHE_TAB, rows);
-}
 
 function msToDate(ms) {
   if (!ms || ms === "0" || parseInt(ms) === 0) return "";
@@ -584,18 +563,11 @@ async function syncHubSpotProjects() {
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
     await ensureTab(sheets, PROJECTS_TAB);
-    await ensureTab(sheets, STAGE_CHANGE_TAB);
-    await ensureTab(sheets, CACHE_TAB);
 
-    const stageCache = await loadStageCache(sheets);
     const projects   = await fetchAllProjects();
     console.log(`[Projects sync] Fetched ${projects.length} projects`);
 
-    const now   = new Date().toISOString();
-    const month = new Date().toLocaleString("default", { month: "long", year: "numeric" });
-
     const projectRows  = [PROJECTS_HEADERS];
-    const stageChanges = [];
 
     for (const p of projects) {
       const props = p.properties || {};
@@ -631,40 +603,12 @@ async function syncHubSpotProjects() {
         msToDate(props.hs_date_entered_5165603044),
       ]);
 
-      const cachedStageId = stageCache[id];
-      if (cachedStageId !== undefined && cachedStageId !== stageId) {
-        stageChanges.push([
-          now, month, id, name,
-          pipeline,
-          stageLabel(cachedStageId),
-          stage,
-          "API Sync",
-        ]);
-        console.log(`[Stage change] ${name}: ${stageLabel(cachedStageId)} → ${stage}`);
-      }
-      stageCache[id] = stageId;
     }
 
     await writeTab(sheets, PROJECTS_TAB, projectRows);
     console.log(`[Projects sync] Wrote ${projectRows.length - 1} rows to "${PROJECTS_TAB}"`);
 
-    const existingChanges = await readTab(sheets, STAGE_CHANGE_TAB);
-    if (!existingChanges.length || existingChanges[0][0] !== "Timestamp") {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${STAGE_CHANGE_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [STAGE_CHANGE_HEADERS] },
-      });
-    }
 
-    if (stageChanges.length) {
-      await appendRows(sheets, STAGE_CHANGE_TAB, stageChanges);
-      console.log(`[Stage Change Log] Logged ${stageChanges.length} new change(s)`);
-    }
-
-    await saveStageCache(sheets, stageCache);
-    console.log(`[Stage cache] Saved ${Object.keys(stageCache).length} project stages`);
 
   } catch (err) {
     console.error("[Projects sync error]", err.message);
@@ -945,72 +889,7 @@ async function syncLiveTrainingPage() {
     }
     console.log(`[LT Page Visits] Updated ${pvBatch.length} rows, appended ${pvAppend.length} new days`);
 
-    // ── UTM Content ───────────────────────────────────────────────────────────
-    await ensureTab(sheets, LT_UTM_TAB);
 
-    const existingUTM = await readTab(sheets, LT_UTM_TAB);
-    const existingUTMKeys = new Set(
-      existingUTM.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
-    );
-
-    if (!existingUTM.length || existingUTM[0][0] !== "Date") {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${LT_UTM_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [LT_UTM_HEADERS] },
-      });
-    }
-
-    const newUTMRows = [];
-
-    // Fetch daily page stats for the livetraining page broken down by utm_content.
-    // The website-pages endpoint supports breakdown=utm-content which returns per-UTM
-    // rows inside each day's array, filtered to a single page via &f=<PAGE_ID>.
-    // Uses the same landing-pages endpoint as LP sync (proven working).
-    // breakdown=utm-content splits results per UTM value per day.
-    const url = `https://api.hubapi.com/analytics/v2/reports/landing-pages/summarize/daily`
-              + `?start=${fmt(start)}&end=${fmt(end)}&f=${LT_PAGE_ID}&breakdown=utm-content`;
-
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` },
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`HubSpot LT analytics error ${res.status}: ${errText}`);
-    }
-
-    const data = await res.json();
-
-    // Response shape: { "YYYYMMDD": [ { breakdownValue, rawViews, newVisitorRawViews, entrances, ... }, ... ] }
-    for (const [date, rows] of Object.entries(data)) {
-      if (!Array.isArray(rows)) continue;
-      for (const row of rows) {
-        const utmValue = row.breakdownValue || row.utmContent || row.utm_content || "";
-        // Only keep the UTM values we care about
-        if (!LT_UTM_FILTERS.includes(utmValue)) continue;
-        const key = `${date}__${utmValue}`;
-        if (existingUTMKeys.has(key)) continue;
-        newUTMRows.push([
-          date,
-          utmValue,
-          row.rawViews            || 0,
-          row.newVisitorRawViews  || 0,
-          row.entrances           || 0,
-        ]);
-        existingUTMKeys.add(key);
-      }
-    }
-
-    newUTMRows.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
-
-    if (newUTMRows.length) {
-      await appendRows(sheets, LT_UTM_TAB, newUTMRows);
-      console.log(`[LT UTM] Appended ${newUTMRows.length} new rows`);
-    } else {
-      console.log(`[LT UTM] No new UTM data`);
-    }
 
   } catch (err) {
     console.error("[LT Analytics error]", err.message);
@@ -1019,7 +898,6 @@ async function syncLiveTrainingPage() {
 
 // ── VIDALYTICS SYNC ───────────────────────────────────────────────────────────
 const VIDALYTICS_TAB         = "Vidalytics";
-const VIDALYTICS_TAGS_TAB    = "Vidalytics Tags";
 const VIDALYTICS_CONTENT_TAB = "Vidalytics Content";
 const VIDALYTICS_CONFIG_TAB  = "Vidalytics Config";
 
@@ -1185,7 +1063,7 @@ async function syncVidalytics() {
     const sheets = google.sheets({ version: "v4", auth });
 
     await ensureTab(sheets, VIDALYTICS_TAB);
-    await ensureTab(sheets, VIDALYTICS_TAGS_TAB);
+
 
     // ── Ensure headers ──
     const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
@@ -1199,27 +1077,11 @@ async function syncVidalytics() {
       });
     }
 
-    const existingTags = await readTab(sheets, VIDALYTICS_TAGS_TAB);
-    if (!existingTags.length || existingTags[0].join(",") !== VIDALYTICS_TAGS_HEADERS.join(",")) {
-      await sheets.spreadsheets.values.clear({ spreadsheetId: SPREADSHEET_ID, range: `${VIDALYTICS_TAGS_TAB}!A:Z` });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${VIDALYTICS_TAGS_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [VIDALYTICS_TAGS_HEADERS] },
-      });
-    }
-
-
     // Re-read after potential header rewrite
     const overallRows  = await readTab(sheets, VIDALYTICS_TAB);
-    const tagsRows     = await readTab(sheets, VIDALYTICS_TAGS_TAB);
 
     // Key on date+video label to support multiple videos per date
     const existingOverallDates = new Set(overallRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean));
-    const existingTagKeys      = new Set(
-      tagsRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean)
-    );
 
 
     // Build date range from launch through yesterday
@@ -1249,7 +1111,6 @@ async function syncVidalytics() {
 
     const sleep          = ms => new Promise(r => setTimeout(r, ms));
     const newOverallRows = [];
-    const newTagRows     = [];
     const round2         = v => v != null ? Math.round(v * 100) / 100 : 0;
 
     // ── Overall tab: loop over both videos ──
@@ -1335,52 +1196,7 @@ async function syncVidalytics() {
       }
     }
 
-    // ── Tags tab ──
-    const chunks = [];
-    let chunkStart = 0;
-    while (chunkStart < datesToFetch.length) {
-      const from  = datesToFetch[chunkStart];
-      const limit = new Date(from);
-      limit.setMonth(limit.getMonth() + 1);
-      limit.setDate(limit.getDate() - 1);
-      const limitStr   = limit.toISOString().split("T")[0];
-      const chunkDates = datesToFetch.slice(chunkStart).filter(d => d <= limitStr);
-      chunks.push({ from, to: chunkDates[chunkDates.length - 1], dates: chunkDates });
-      chunkStart += chunkDates.length;
-    }
-
-    for (const chunk of chunks) {
-      const tagsByDate = await fetchVidalyticsTags(chunk.from, chunk.to, vidHeaders);
-      await sleep(5000);
-
-      for (const dateStr of chunk.dates) {
-        const tagData = tagsByDate[dateStr] || {};
-        for (const [tag, m] of Object.entries(tagData)) {
-          if (tag === "Non-Tagged" || tag === "All" || tag === "all") continue;
-          const key = `${dateStr}__${tag}`;
-          if (!existingTagKeys.has(key)) {
-            newTagRows.push([
-              dateStr, tag,
-              m.plays            ?? 0,
-              m.impressions      ?? 0,
-              m.unique_viewers   ?? 0,
-              round2(m.play_rate),
-              round2(m.unmute_rate),
-              round2(m.avg_watched),
-              m.conversions      ?? 0,
-              round2(m.conversion_rate),
-              round2(m.bounce_rate),
-              m.cta_clicks       ?? 0,
-            ]);
-            existingTagKeys.add(key);
-          }
-        }
-      }
-    }
-
-    // Content filter (filter.url_params) is Enterprise-only — removed
-
-        // ── Write all new rows ──
+    // ── Write all new rows ──
     if (newOverallRows.length) {
       await appendRows(sheets, VIDALYTICS_TAB, newOverallRows);
       console.log(`[Vidalytics sync] Overall: appended ${newOverallRows.length} row(s)`);
@@ -1388,12 +1204,7 @@ async function syncVidalytics() {
       console.log(`[Vidalytics sync] Overall: nothing new`);
     }
 
-    if (newTagRows.length) {
-      await appendRows(sheets, VIDALYTICS_TAGS_TAB, newTagRows);
-      console.log(`[Vidalytics sync] Tags: appended ${newTagRows.length} row(s)`);
-    } else {
-      console.log(`[Vidalytics sync] Tags: nothing new`);
-    }
+
 
 
   } catch (err) {
@@ -1409,61 +1220,7 @@ app.post("/webhook/hubspot", async (req, res) => {
     const events = Array.isArray(req.body) ? req.body : [req.body];
     const auth   = getGoogleAuth();
     const sheets = google.sheets({ version: "v4", auth });
-    await ensureTab(sheets, STAGE_CHANGE_TAB);
-
-    const rows = [];
-
-    for (const event of events) {
-      const objectId    = String(event.objectId || event.id || "");
-      const propertyName = event.propertyName || event.property || "";
-
-      if (!propertyName.includes("pipeline_stage") && propertyName !== "hs_pipeline_stage") continue;
-
-      const newStageId = event.propertyValue || event.value || "";
-      const oldStageId = event.previousPropertyValue || event.previousValue || lastKnownStage[objectId] || "";
-
-      const now   = new Date().toISOString();
-      const month = new Date().toLocaleString("default", { month: "long", year: "numeric" });
-
-      let projectName = "";
-      let pipelineId  = "";
-      try {
-        const res2 = await fetch(
-          `https://api.hubapi.com/crm/v3/objects/projects/${objectId}?properties=hs_name,hs_pipeline`,
-          { headers: { Authorization: `Bearer ${HUBSPOT_TOKEN}` } }
-        );
-        if (res2.ok) {
-          const d    = await res2.json();
-          projectName = d.properties?.hs_name || "";
-          pipelineId  = d.properties?.hs_pipeline || "";
-        }
-      } catch { /* non-fatal */ }
-
-      rows.push([
-        now, month, objectId, projectName,
-        pipelineLabel(pipelineId),
-        stageLabel(oldStageId),
-        stageLabel(newStageId),
-        "Webhook",
-      ]);
-
-      lastKnownStage[objectId] = newStageId;
-    }
-
-    const existing = await readTab(sheets, STAGE_CHANGE_TAB);
-    if (!existing.length || existing[0][0] !== "Timestamp") {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${STAGE_CHANGE_TAB}!A1`,
-        valueInputOption: "RAW",
-        requestBody: { values: [STAGE_CHANGE_HEADERS] },
-      });
-    }
-
-    if (rows.length) {
-      await appendRows(sheets, STAGE_CHANGE_TAB, rows);
-      console.log(`[Webhook] Logged ${rows.length} stage change(s)`);
-    }
+    // Stage change logging removed
   } catch (err) {
     console.error("[Webhook error]", err.message);
   }
@@ -1812,19 +1569,6 @@ async function syncMeetings() {
 }
 
 app.get("/sync-lt", async (req, res) => {
-  if (req.query.clear === "true") {
-    try {
-      const auth   = getGoogleAuth();
-      const sheets = google.sheets({ version: "v4", auth });
-      await sheets.spreadsheets.values.clear({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${LT_UTM_TAB}!A:Z`,
-      });
-      console.log(`[sync-lt] Cleared "${LT_UTM_TAB}" tab before re-sync`);
-    } catch (e) {
-      console.error("[sync-lt clear error]", e.message);
-    }
-  }
   syncLiveTrainingPage();
   res.json({ success: true, message: "Live training page analytics sync started" });
 });
