@@ -691,9 +691,7 @@ async function syncOperationsTicketsV2() {
 
     for (const t of tickets) {
       const props = t.properties || {};
-      // Only include tickets created on or after June 8
-      const created = props.createdate ? new Date(props.createdate).getTime() : 0;
-      if (created < cutoff) continue;
+      // Include all tickets (no date filter — new stages apply to all tickets)
 
       rows.push([
         t.id,
