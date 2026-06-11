@@ -1173,10 +1173,9 @@ async function syncVidalytics() {
     await ensureTab(sheets, VIDALYTICS_TAB);
 
 
-    // ── Ensure headers ──
+    // ── Ensure headers (only write if tab is empty — never clear existing data) ──
     const existingOverall = await readTab(sheets, VIDALYTICS_TAB);
-    if (!existingOverall.length || existingOverall[0].join(",") !== VIDALYTICS_HEADERS.join(",")) {
-      await sheets.spreadsheets.values.clear({ spreadsheetId: SPREADSHEET_ID, range: `${VIDALYTICS_TAB}!A:Z` });
+    if (!existingOverall.length || existingOverall[0][0] !== "Date") {
       await sheets.spreadsheets.values.update({
         spreadsheetId: SPREADSHEET_ID,
         range: `${VIDALYTICS_TAB}!A1`,
@@ -1185,8 +1184,7 @@ async function syncVidalytics() {
       });
     }
 
-    // Re-read after potential header rewrite
-    const overallRows  = await readTab(sheets, VIDALYTICS_TAB);
+    const overallRows  = existingOverall.length ? existingOverall : await readTab(sheets, VIDALYTICS_TAB);
 
     // Key on date+video label to support multiple videos per date
     const existingOverallDates = new Set(overallRows.slice(1).map(r => r[0] && r[1] ? `${r[0]}__${r[1]}` : null).filter(Boolean));
