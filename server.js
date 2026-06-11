@@ -106,11 +106,8 @@ const PIPELINES_DATA = [
       { id: "5272068333", label: "Suggestions" },
       { id: "4609840367", label: "To Do" },
       { id: "4609840368", label: "Doing" },
-      { id: "4609840369", label: "Ops Review" },
-      { id: "5471594709", label: "Dept. Review" },
+      { id: "4609840369", label: "Review" },
       { id: "4609840370", label: "Completed" },
-      { id: "5470463189", label: "Push For Rollout" },
-      { id: "5471604984", label: "Bug Fixed" },
       { id: "4609840371", label: "Blocked" },
       { id: "4609840372", label: "Backlog" },
     ],
@@ -125,6 +122,16 @@ const WEBINAR_HS_HEADERS = [
 
 const OPS_TAB = "Operations Tickets";
 const OPS_HEADERS = [
+  "Project ID", "Project Name", "Pipeline", "Stage",
+  "Owner", "Created Date", "Last Modified", "Due Date",
+  "Date Entered Suggestions", "Date Entered To Do", "Date Entered Doing",
+  "Date Entered Review", "Date Entered Completed", "Date Entered Blocked",
+  "Date Entered Backlog",
+];
+
+const OPS_V2_TAB       = "Operations Tickets (New)";
+const OPS_V2_START     = "2026-06-08"; // Only show tickets created/modified on or after this date
+const OPS_V2_HEADERS   = [
   "Project ID", "Project Name", "Pipeline", "Stage",
   "Owner", "Created Date", "Last Modified", "Due Date",
   "Date Entered Suggestions", "Date Entered To Do", "Date Entered Doing",
@@ -521,10 +528,7 @@ async function fetchAllOpsTickets() {
     "hs_date_entered_4609840367",
     "hs_date_entered_4609840368",
     "hs_date_entered_4609840369",
-    "hs_date_entered_5471594709",
     "hs_date_entered_4609840370",
-    "hs_date_entered_5470463189",
-    "hs_date_entered_5471604984",
     "hs_date_entered_4609840371",
     "hs_date_entered_4609840372",
   ].join(",");
@@ -622,6 +626,105 @@ async function syncHubSpotProjects() {
   }
 }
 
+async function fetchAllOpsV2Tickets() {
+  const properties = [
+    "hs_name", "hs_pipeline", "hs_pipeline_stage",
+    "hubspot_owner_id", "createdate", "hs_lastmodifieddate",
+    "hs_due_date",
+    "hs_date_entered_5272068333",
+    "hs_date_entered_4609840367",
+    "hs_date_entered_4609840368",
+    "hs_date_entered_4609840369",
+    "hs_date_entered_5471594709",
+    "hs_date_entered_4609840370",
+    "hs_date_entered_5470463189",
+    "hs_date_entered_5471604984",
+    "hs_date_entered_4609840371",
+    "hs_date_entered_4609840372",
+  ];
+
+  const tickets = [];
+  let after = null;
+
+  while (true) {
+    const body = {
+      filterGroups: [{ filters: [{ propertyName: "hs_pipeline", operator: "EQ", value: "3364165843" }] }],
+      properties,
+      limit: 100,
+      ...(after ? { after } : {}),
+    };
+
+    const res = await fetch("https://api.hubapi.com/crm/v3/objects/projects/search", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`HubSpot Ops v2 fetch error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    tickets.push(...(data.results || []));
+    after = data.paging?.next?.after || null;
+    if (!after) break;
+  }
+
+  return tickets;
+}
+
+async function syncOperationsTicketsV2() {
+  try {
+    const auth   = getGoogleAuth();
+    const sheets = google.sheets({ version: "v4", auth });
+    await ensureTab(sheets, OPS_V2_TAB);
+
+    const tickets = await fetchAllOpsV2Tickets();
+    console.log(`[Ops v2 sync] Fetched ${tickets.length} tickets`);
+
+    const cutoff = new Date(OPS_V2_START).getTime();
+    const rows   = [OPS_V2_HEADERS];
+
+    for (const t of tickets) {
+      const props = t.properties || {};
+      // Only include tickets created on or after June 8
+      const created = props.createdate ? new Date(props.createdate).getTime() : 0;
+      if (created < cutoff) continue;
+
+      rows.push([
+        t.id,
+        props.hs_name || "",
+        "Operations Tickets",
+        stageLabel(props.hs_pipeline_stage),
+        props.hubspot_owner_id || "",
+        props.createdate ? msToDate(new Date(props.createdate).getTime()) : "",
+        props.hs_lastmodifieddate ? msToDate(new Date(props.hs_lastmodifieddate).getTime()) : "",
+        props.hs_due_date || "",
+        msToDate(props.hs_date_entered_5272068333),
+        msToDate(props.hs_date_entered_4609840367),
+        msToDate(props.hs_date_entered_4609840368),
+        msToDate(props.hs_date_entered_4609840369),
+        msToDate(props.hs_date_entered_5471594709),
+        msToDate(props.hs_date_entered_4609840370),
+        msToDate(props.hs_date_entered_5470463189),
+        msToDate(props.hs_date_entered_5471604984),
+        msToDate(props.hs_date_entered_4609840371),
+        msToDate(props.hs_date_entered_4609840372),
+      ]);
+    }
+
+    await writeTab(sheets, OPS_V2_TAB, rows);
+    console.log(`[Ops v2 sync] Wrote ${rows.length - 1} rows to "${OPS_V2_TAB}"`);
+
+  } catch (err) {
+    console.error("[Ops v2 sync error]", err.message);
+  }
+}
+
 async function syncOperationsTickets() {
   try {
     const auth   = getGoogleAuth();
@@ -648,10 +751,7 @@ async function syncOperationsTickets() {
         msToDate(props.hs_date_entered_4609840367),
         msToDate(props.hs_date_entered_4609840368),
         msToDate(props.hs_date_entered_4609840369),
-        msToDate(props.hs_date_entered_5471594709),
         msToDate(props.hs_date_entered_4609840370),
-        msToDate(props.hs_date_entered_5470463189),
-        msToDate(props.hs_date_entered_5471604984),
         msToDate(props.hs_date_entered_4609840371),
         msToDate(props.hs_date_entered_4609840372),
       ]);
@@ -1453,6 +1553,11 @@ app.get("/sync-ops", async (req, res) => {
   res.json({ success: true, message: "Operations Tickets sync started in background" });
 });
 
+app.get("/sync-ops-v2", async (req, res) => {
+  syncOperationsTicketsV2();
+  res.json({ success: true, message: "Operations Tickets v2 sync started in background" });
+});
+
 app.get("/sync-webinar", async (req, res) => {
   syncWebinar();
   res.json({ success: true, message: "Webinar sync started in background" });
@@ -1734,6 +1839,7 @@ setTimeout(() => {
   syncInProgress();
   syncHubSpotProjects();
   syncOperationsTickets();
+  syncOperationsTicketsV2();
   syncWebinar();
   syncWebinarForm();
   syncLandingPageAnalytics();
@@ -1753,6 +1859,7 @@ setTimeout(() => {
 setInterval(syncInProgress,           60 * 60 * 1000); // every hour
 setInterval(syncHubSpotProjects,      60 * 60 * 1000); // every hour
 setInterval(syncOperationsTickets,    60 * 60 * 1000); // every hour
+setInterval(syncOperationsTicketsV2,  60 * 60 * 1000); // every hour
 setInterval(syncWebinar,              60 * 60 * 1000); // every hour
 setInterval(syncWebinarForm,          60 * 60 * 1000); // every hour
 setInterval(syncLandingPageAnalytics, 60 * 60 * 1000); // every hour
