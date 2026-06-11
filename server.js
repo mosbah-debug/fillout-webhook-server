@@ -106,8 +106,11 @@ const PIPELINES_DATA = [
       { id: "5272068333", label: "Suggestions" },
       { id: "4609840367", label: "To Do" },
       { id: "4609840368", label: "Doing" },
-      { id: "4609840369", label: "Review" },
+      { id: "4609840369", label: "Ops Review" },
+      { id: "5471594709", label: "Dept. Review" },
       { id: "4609840370", label: "Completed" },
+      { id: "5470463189", label: "Push For Rollout" },
+      { id: "5471604984", label: "Bug Fixed" },
       { id: "4609840371", label: "Blocked" },
       { id: "4609840372", label: "Backlog" },
     ],
@@ -125,8 +128,9 @@ const OPS_HEADERS = [
   "Project ID", "Project Name", "Pipeline", "Stage",
   "Owner", "Created Date", "Last Modified", "Due Date",
   "Date Entered Suggestions", "Date Entered To Do", "Date Entered Doing",
-  "Date Entered Review", "Date Entered Completed", "Date Entered Blocked",
-  "Date Entered Backlog",
+  "Date Entered Ops Review", "Date Entered Dept. Review", "Date Entered Completed",
+  "Date Entered Push For Rollout", "Date Entered Bug Fixed",
+  "Date Entered Blocked", "Date Entered Backlog",
 ];
 
 const PIPELINE_MAP = {};
@@ -517,7 +521,10 @@ async function fetchAllOpsTickets() {
     "hs_date_entered_4609840367",
     "hs_date_entered_4609840368",
     "hs_date_entered_4609840369",
+    "hs_date_entered_5471594709",
     "hs_date_entered_4609840370",
+    "hs_date_entered_5470463189",
+    "hs_date_entered_5471604984",
     "hs_date_entered_4609840371",
     "hs_date_entered_4609840372",
   ].join(",");
@@ -641,7 +648,10 @@ async function syncOperationsTickets() {
         msToDate(props.hs_date_entered_4609840367),
         msToDate(props.hs_date_entered_4609840368),
         msToDate(props.hs_date_entered_4609840369),
+        msToDate(props.hs_date_entered_5471594709),
         msToDate(props.hs_date_entered_4609840370),
+        msToDate(props.hs_date_entered_5470463189),
+        msToDate(props.hs_date_entered_5471604984),
         msToDate(props.hs_date_entered_4609840371),
         msToDate(props.hs_date_entered_4609840372),
       ]);
